@@ -131,7 +131,3 @@ Run the tests using the `go test` command:
 ```sh
 go test ./network/tests
 ```
-
-## Conclusion
-
-The `node` package provides a robust and modular foundation for building networked applications. It simplifies node lifecycle management, inter-node communication, and event handling, making it an ideal choice for developers looking to build scalable and high-performance systems.
