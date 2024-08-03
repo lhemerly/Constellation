@@ -1,6 +1,6 @@
 # Constellation Package
 
-[![codecov](https://codecov.io/gh/your_username/your_repository/branch/main/graph/badge.svg)](https://codecov.io/gh/lhemerly/Constellation)
+[![codecov](https://codecov.io/gh/lhemerly/Constellation/branch/main/graph/badge.svg)](https://codecov.io/gh/lhemerly/Constellation)
 
 The `Constellation` package provides abstractions for creating and managing nodes within a networked system. It includes core functionality for node lifecycle management, event handling, and inter-node communication, optimized for asynchronous operations and concurrency.
 
