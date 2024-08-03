@@ -1,0 +1,27 @@
+mode: set
+github.com/lhemerly/Constellation/network/base_node.go:16.39,20.57 1 0
+github.com/lhemerly/Constellation/network/base_node.go:20.57,22.10 1 0
+github.com/lhemerly/Constellation/network/base_node.go:27.35,30.2 1 0
+github.com/lhemerly/Constellation/network/base_node.go:33.35,36.2 1 0
+github.com/lhemerly/Constellation/network/base_node.go:39.58,41.2 1 0
+github.com/lhemerly/Constellation/network/base_node.go:44.77,46.2 1 0
+github.com/lhemerly/Constellation/network/base_node.go:49.47,54.2 4 0
+github.com/lhemerly/Constellation/network/base_node.go:57.49,62.2 4 0
+github.com/lhemerly/Constellation/network/base_node.go:65.47,68.42 3 0
+github.com/lhemerly/Constellation/network/base_node.go:68.42,70.6 1 0
+github.com/lhemerly/Constellation/network/base_node.go:71.5,71.15 1 0
+github.com/lhemerly/Constellation/network/base_node.go:75.35,77.2 1 0
+github.com/lhemerly/Constellation/network/base_node.go:80.52,84.2 3 0
+github.com/lhemerly/Constellation/network/base_node.go:16.39,20.57 1 1
+github.com/lhemerly/Constellation/network/base_node.go:20.57,22.10 1 1
+github.com/lhemerly/Constellation/network/base_node.go:27.35,30.2 1 1
+github.com/lhemerly/Constellation/network/base_node.go:33.35,36.2 1 1
+github.com/lhemerly/Constellation/network/base_node.go:39.58,41.2 1 1
+github.com/lhemerly/Constellation/network/base_node.go:44.77,46.2 1 1
+github.com/lhemerly/Constellation/network/base_node.go:49.47,54.2 4 1
+github.com/lhemerly/Constellation/network/base_node.go:57.49,62.2 4 1
+github.com/lhemerly/Constellation/network/base_node.go:65.47,68.42 3 1
+github.com/lhemerly/Constellation/network/base_node.go:68.42,70.6 1 1
+github.com/lhemerly/Constellation/network/base_node.go:71.5,71.15 1 1
+github.com/lhemerly/Constellation/network/base_node.go:75.35,77.2 1 1
+github.com/lhemerly/Constellation/network/base_node.go:80.52,84.2 3 1
