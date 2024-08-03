@@ -1,9 +1,9 @@
 package network_test
 
 import (
+	"fmt"
 	"sync"
 	"testing"
-	"fmt"
 
 	"github.com/lhemerly/Constellation/network"
 )
@@ -15,14 +15,11 @@ func TestBaseNodeEventNotification(t *testing.T) {
 
 	type EventNode struct {
 		*network.BaseNode
-		eventsReceived int
-		eventMutex     sync.Mutex
 	}
 
 	newEventNode := func(id string) *EventNode {
 		return &EventNode{
-			BaseNode:       network.NewBaseNode(id),
-			eventsReceived: 0,
+			BaseNode: network.NewBaseNode(id),
 		}
 	}
 
@@ -46,18 +43,11 @@ func TestBaseNodeEventNotification(t *testing.T) {
 		}
 	}
 
-	// Process method for EventNode
-	process := func(n *EventNode, input []byte) ([]byte, error) {
-		n.eventMutex.Lock()
-		n.eventsReceived++
-		n.eventMutex.Unlock()
-		return input, nil
-	}
-
 	// Set custom process method for EventNode
 	for i := 0; i < numNodes; i++ {
 		nodes[i].SetProcessFunc(func(input []byte) ([]byte, error) {
-			return process(nodes[i], input)
+			// The event counting is now handled internally by BaseNode
+			return input, nil
 		})
 	}
 
@@ -79,12 +69,10 @@ func TestBaseNodeEventNotification(t *testing.T) {
 
 	// Verify that each node received the correct number of events
 	for i := 0; i < numNodes; i++ {
-		nodes[i].eventMutex.Lock()
-		expectedEvents := (numNodes - 1) * numEvents
-		if nodes[i].eventsReceived != expectedEvents {
-			t.Errorf("Node %d: eventsReceived = %d, want %d", i, nodes[i].eventsReceived, expectedEvents)
+		expectedEvents := uint64((numNodes - 1) * numEvents)
+		if nodes[i].GetEventCount() != expectedEvents {
+			t.Errorf("Node %d: eventsReceived = %d, want %d", i, nodes[i].GetEventCount(), expectedEvents)
 		}
-		nodes[i].eventMutex.Unlock()
 	}
 
 	for i := 0; i < numNodes; i++ {
