@@ -1,20 +1,20 @@
-package network_test
+package node_test
 
 import (
     "sync"
     "testing"
 	"fmt"
 
-    "github.com/lhemerly/Constellation/network"
+    "github.com/lhemerly/Constellation/node"
 )
 
 func TestBaseNodeSubscriptionManagement(t *testing.T) {
     const numNodes = 100
     var wg sync.WaitGroup
 
-    nodes := make([]*network.BaseNode, numNodes)
+    nodes := make([]*node.BaseNode, numNodes)
     for i := 0; i < numNodes; i++ {
-        node := network.NewBaseNode("node-" + fmt.Sprint(i))
+        node := node.NewBaseNode("node-" + fmt.Sprint(i))
         nodes[i] = node
         if err := node.Create(); err != nil {
             t.Fatalf("Node %d: Create() error = %v", i, err)

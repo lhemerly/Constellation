@@ -1,9 +1,9 @@
-// Package network provides abstractions for creating and managing nodes
+// Package node provides abstractions for creating and managing nodes
 // within a networked system. It includes core functionality for node lifecycle
 // management, event handling, and inter-node communication, optimized for
 // asynchronous operations and concurrency.
 //
-// The network package is designed to offer a seamless developer experience
+// The node package is designed to offer a seamless developer experience
 // with a focus on modularity and ease of use. It leverages the latest
 // technologies and best practices to ensure high performance, scalability,
 // and ease of use.
@@ -26,7 +26,7 @@
 // 
 //  import (
 //      "fmt"
-//      "github.com/lhemerly/Constellation/network"
+//      "github.com/lhemerly/Constellation/node"
 //  )
 // 
 //  func main() {
@@ -86,10 +86,10 @@
 //      }
 //  }
 //
-// The network package is suitable for building scalable and high-performance
+// The node package is suitable for building scalable and high-performance
 // networked applications, simplifying node lifecycle management, inter-node
 // communication, and event handling.
-package network
+package node
 
 // Node defines the basic operations of any node in the network.
 type Node interface {
