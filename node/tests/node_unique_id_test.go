@@ -1,21 +1,21 @@
-package network_test
+package node_test
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/lhemerly/Constellation/network"
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestBaseNodeUniqueIdentification(t *testing.T) {
 	const numNodes = 100
 
-	nodes := make([]*network.BaseNode, numNodes)
+	nodes := make([]*node.BaseNode, numNodes)
 	ids := make(map[string]bool)
 
 	for i := 0; i < numNodes; i++ {
 		nodeID := "node-" + fmt.Sprint(i)
-		node := network.NewBaseNode(nodeID)
+		node := node.NewBaseNode(nodeID)
 		nodes[i] = node
 		if err := node.Create(); err != nil {
 			t.Fatalf("Node %d: Create() error = %v", i, err)

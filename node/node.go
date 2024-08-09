@@ -86,7 +86,7 @@
 //      }
 //  }
 //
-// The network package is suitable for building scalable and high-performance
+// The node package is suitable for building scalable and high-performance
 // networked applications, simplifying node lifecycle management, inter-node
 // communication, and event handling.
 package node

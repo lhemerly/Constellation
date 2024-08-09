@@ -1,11 +1,11 @@
-package network_test
+package node_test
 
 import (
 	"fmt"
 	"sync"
 	"testing"
 
-	"github.com/lhemerly/Constellation/network"
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestBaseNodeInitializationAndCleanup(t *testing.T) {
@@ -13,12 +13,12 @@ func TestBaseNodeInitializationAndCleanup(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numNodes)
 
-	nodes := make([]*network.BaseNode, numNodes)
+	nodes := make([]*node.BaseNode, numNodes)
 
 	for i := 0; i < numNodes; i++ {
 		go func(i int) {
 			defer wg.Done()
-			node := network.NewBaseNode("node-" + fmt.Sprint(i))
+			node := node.NewBaseNode("node-" + fmt.Sprint(i))
 			nodes[i] = node
 			if err := node.Create(); err != nil {
 				t.Errorf("Node %d: Create() error = %v", i, err)

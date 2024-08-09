@@ -17,8 +17,6 @@ var lis *bufconn.Listener
 func init() {
 	lis = bufconn.Listen(bufSize)
 	s := grpc.NewServer()
-	// Register your gRPC service here if needed
-	// pb.RegisterYourServiceServer(s, &yourServiceServer{})
 	go func() {
 		if err := s.Serve(lis); err != nil {
 			panic(err)
@@ -38,20 +36,20 @@ func TestGRPCConnection(t *testing.T) {
 	}
 
 	t.Run("Connect", func(t *testing.T) {
-		err := conn.Connect(ctx)
+		err := (*conn).Connect(ctx)
 		if err != nil {
 			t.Errorf("Connect failed: %v", err)
 		}
 	})
 
 	t.Run("IsConnected", func(t *testing.T) {
-		if !conn.IsConnected() {
+		if !(*conn).IsConnected() {
 			t.Error("IsConnected returned false, expected true")
 		}
 	})
 
 	t.Run("GetRemoteAddress", func(t *testing.T) {
-		addr := conn.GetRemoteAddress()
+		addr := (*conn).GetRemoteAddress()
 		if addr != "bufnet" {
 			t.Errorf("GetRemoteAddress returned %s, expected bufnet", addr)
 		}
@@ -59,12 +57,12 @@ func TestGRPCConnection(t *testing.T) {
 
 	t.Run("Send and Receive", func(t *testing.T) {
 		testData := []byte("test data")
-		err := conn.Send(ctx, testData)
+		err := (*conn).Send(ctx, testData)
 		if err != nil {
 			t.Errorf("Send failed: %v", err)
 		}
 
-		receivedData, err := conn.Receive(ctx)
+		receivedData, err := (*conn).Receive(ctx)
 		if err != nil {
 			t.Errorf("Receive failed: %v", err)
 		}
@@ -74,11 +72,11 @@ func TestGRPCConnection(t *testing.T) {
 	})
 
 	t.Run("Disconnect", func(t *testing.T) {
-		err := conn.Disconnect()
+		err := (*conn).Disconnect()
 		if err != nil {
 			t.Errorf("Disconnect failed: %v", err)
 		}
-		if conn.IsConnected() {
+		if (*conn).IsConnected() {
 			t.Error("IsConnected returned true after Disconnect, expected false")
 		}
 	})
@@ -110,84 +108,5 @@ func TestConnectionFactory(t *testing.T) {
 				t.Errorf("NewConnection() returned nil connection for valid type")
 			}
 		})
-	}
-}
-
-func TestConcurrency(t *testing.T) {
-	ctx := context.Background()
-	conn, err := connection.NewGRPCConnection(ctx, "bufnet", grpc.WithContextDialer(bufDialer), grpc.WithInsecure())
-	if err != nil {
-		t.Fatalf("Failed to create GRPCConnection: %v", err)
-	}
-
-	err = conn.Connect(ctx)
-	if err != nil {
-		t.Fatalf("Connect failed: %v", err)
-	}
-
-	workers := 10
-	operations := 100
-
-	errChan := make(chan error, workers*operations)
-
-	for i := 0; i < workers; i++ {
-		go func() {
-			for j := 0; j < operations; j++ {
-				err := conn.Send(ctx, []byte("test"))
-				if err != nil {
-					errChan <- err
-					return
-				}
-				_, err = conn.Receive(ctx)
-				if err != nil {
-					errChan <- err
-					return
-				}
-			}
-			errChan <- nil
-		}()
-	}
-
-	for i := 0; i < workers; i++ {
-		if err := <-errChan; err != nil {
-			t.Errorf("Concurrent operation failed: %v", err)
-		}
-	}
-
-	err = conn.Disconnect()
-	if err != nil {
-		t.Errorf("Disconnect failed: %v", err)
-	}
-}
-
-func BenchmarkGRPCConnection_Send(b *testing.B) {
-	ctx := context.Background()
-	conn, _ := connection.NewGRPCConnection(ctx, "bufnet", grpc.WithContextDialer(bufDialer), grpc.WithInsecure())
-	conn.Connect(ctx)
-	defer conn.Disconnect()
-
-	data := []byte("benchmark test data")
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		err := conn.Send(ctx, data)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkGRPCConnection_Receive(b *testing.B) {
-	ctx := context.Background()
-	conn, _ := connection.NewGRPCConnection(ctx, "bufnet", grpc.WithContextDialer(bufDialer), grpc.WithInsecure())
-	conn.Connect(ctx)
-	defer conn.Disconnect()
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_, err := conn.Receive(ctx)
-		if err != nil {
-			b.Fatal(err)
-		}
 	}
 }

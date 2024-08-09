@@ -1,11 +1,11 @@
-package network_test
+package node_test
 
 import (
 	"fmt"
 	"sync"
 	"testing"
 
-	"github.com/lhemerly/Constellation/network"
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestBaseNodeEventNotification(t *testing.T) {
@@ -14,12 +14,12 @@ func TestBaseNodeEventNotification(t *testing.T) {
 	var wg sync.WaitGroup
 
 	type EventNode struct {
-		*network.BaseNode
+		*node.BaseNode
 	}
 
 	newEventNode := func(id string) *EventNode {
 		return &EventNode{
-			BaseNode: network.NewBaseNode(id),
+			BaseNode: node.NewBaseNode(id),
 		}
 	}
 
