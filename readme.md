@@ -1,75 +1,62 @@
-# Constellation Package
+# Constellation Project
 
 [![codecov](https://codecov.io/gh/lhemerly/Constellation/branch/main/graph/badge.svg)](https://codecov.io/gh/lhemerly/Constellation)
 
-The `Constellation` package provides abstractions for creating and managing nodes within a networked system. It includes core functionality for node lifecycle management, event handling, and inter-node communication, optimized for asynchronous operations and concurrency.
+The Constellation project provides a robust framework for creating and managing networked systems. It consists of two main packages: `Constellation` for node management and `connection` for handling network connections.
 
 ## Overview
 
-The `Constellation` package is designed to offer a seamless developer experience with a focus on modularity and ease of use. It leverages the latest technologies and best practices to ensure high performance, scalability, and ease of use.
+This project is designed to offer a seamless developer experience with a focus on modularity, ease of use, and high performance. It leverages the latest technologies and best practices to ensure scalability and efficiency in networked systems.
 
-## Components
+## Packages
 
-### Node Interface
+### 1. Constellation Package
 
-The `Node` interface defines the basic operations and properties that all node types must implement:
+The `Constellation` package provides abstractions for creating and managing nodes within a networked system. It includes core functionality for node lifecycle management, event handling, and inter-node communication, optimized for asynchronous operations and concurrency.
 
-- **Create() error**: Initializes the node, setting up any necessary resources.
-- **Delete() error**: Cleans up the node, releasing any resources.
-- **Process(input []byte) ([]byte, error)**: Processes input data and returns output.
-- **GetID() string**: Returns the node's unique identifier.
-- **Subscribe(node Node) error**: Adds a node to the subscription list for event notifications.
-- **Unsubscribe(node Node) error**: Removes a node from the subscription list.
-- **Notify(event []byte) error**: Notifies all subscribed nodes with an event.
+#### Key Components
 
-### BaseNode Struct
+- **Node Interface**: Defines basic operations and properties for all node types.
+- **BaseNode Struct**: Provides common functionality that can be extended by specific node types.
 
-The `BaseNode` struct provides common functionality that can be extended by specific node types:
+#### Features
 
-- Implements the `Node` interface.
-- Manages lifecycle events (create, delete), subscriptions, and notifications.
-- Ensures thread-safe operations using synchronization primitives.
-- Allows setting custom processing functions for data processing.
+- Node Lifecycle Management
+- Data Processing
+- Subscription Management
+- Event Notification
 
-## Features
+### 2. Connection Package
 
-### Node Lifecycle Management
+The `connection` package provides an abstraction layer for network connections, allowing for a unified approach to connecting, disconnecting, sending, and receiving data across different protocols.
 
-- **Create**: Initializes the node, setting up necessary resources.
-- **Delete**: Cleans up the node, releasing resources.
+#### Key Components
 
-### Data Processing
+- **Connection Interface**: Defines common methods for all connection types.
+- **ConnectionFactory**: Factory for creating different types of connections.
+- **GRPCConnection**: Implementation of the Connection interface for gRPC connections.
 
-- **Process**: Handles input data and returns output. By default, it performs a simple echo of the input data.
+#### Features
 
-### Subscription Management
+- Protocol-agnostic connection management
+- Support for gRPC connections (extensible to other protocols)
+- Unified interface for sending and receiving data
 
-- **Subscribe**: Adds a node to the subscription list for event notifications.
-- **Unsubscribe**: Removes a node from the subscription list.
-- Ensures thread-safe operations for managing subscriptions.
+## Usage Examples
 
-### Event Notification
-
-- **Notify**: Sends an event to all subscribed nodes asynchronously.
-- Handles high concurrency efficiently using goroutines.
-
-## Usage
-
-### Example
+### Constellation Package
 
 ```go
 package main
 
 import (
     "fmt"
-    "github.com/lhemerly/Constellation"
+    "github.com/lhemerly/Constellation/network"
 )
 
 func main() {
-    // Create a new BaseNode
+    // Create and initialize a new BaseNode
     node := network.NewBaseNode("node-1")
-    
-    // Initialize the node
     if err := node.Create(); err != nil {
         fmt.Printf("Error creating node: %v\n", err)
         return
@@ -77,30 +64,16 @@ func main() {
 
     // Set a custom process function
     node.SetProcessFunc(func(input []byte) ([]byte, error) {
-        // Custom processing logic
         return []byte(fmt.Sprintf("Processed: %s", input)), nil
     })
 
     // Process data
-    input := []byte("Hello, Node!")
-    output, err := node.Process(input)
+    output, err := node.Process([]byte("Hello, Node!"))
     if err != nil {
         fmt.Printf("Error processing data: %v\n", err)
     } else {
         fmt.Printf("Output: %s\n", output)
     }
-
-    // Subscribe to another node
-    otherNode := network.NewBaseNode("node-2")
-    otherNode.Create()
-    node.Subscribe(otherNode)
-
-    // Notify subscribed nodes
-    event := []byte("Event data")
-    node.Notify(event)
-
-    // Unsubscribe from the other node
-    node.Unsubscribe(otherNode)
 
     // Clean up the node
     if err := node.Delete(); err != nil {
@@ -109,27 +82,68 @@ func main() {
 }
 ```
 
+### Connection Package
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "github.com/lhemerly/Constellation/connection"
+)
+
+func main() {
+    factory := connection.NewConnectionFactory()
+    ctx := context.Background()
+
+    // Create a new gRPC connection
+    conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051")
+    if err != nil {
+        log.Fatalf("Failed to create connection: %v", err)
+    }
+
+    // Connect
+    if err := (*conn).Connect(ctx); err != nil {
+        log.Fatalf("Failed to connect: %v", err)
+    }
+    defer (*conn).Disconnect()
+
+    // Send data
+    if err := (*conn).Send(ctx, []byte("Hello, server!")); err != nil {
+        log.Fatalf("Failed to send data: %v", err)
+    }
+
+    // Receive data
+    data, err := (*conn).Receive(ctx)
+    if err != nil {
+        log.Fatalf("Failed to receive data: %v", err)
+    }
+
+    fmt.Printf("Received: %s\n", string(data))
+}
+```
+
 ## Testing
 
-The package includes comprehensive tests to ensure correct functionality. The tests cover:
-
-1. **Node Initialization and Cleanup**
-   - Verify that nodes can be created and deleted asynchronously without errors.
-
-2. **Data Processing**
-   - Ensure nodes can process input data asynchronously and return appropriate output.
-
-3. **Unique Identification**
-   - Check that each node returns its unique identifier correctly.
-
-4. **Subscription Management**
-   - Verify that nodes can manage subscriptions asynchronously and handle concurrency.
-
-5. **Event Notification**
-   - Ensure nodes can notify all subscribed nodes asynchronously and handle high concurrency.
-
-Run the tests using the `go test` command:
+Both packages include comprehensive tests to ensure correct functionality. Run the tests using the `go test` command:
 
 ```sh
-go test ./network/tests
+go test ./...
 ```
+
+## Extensibility
+
+The project is designed to be easily extensible:
+
+- New node types can be created by implementing the `Node` interface or extending the `BaseNode` struct.
+- Additional connection types can be added by implementing the `Connection` interface and updating the `ConnectionFactory`.
+
+## Contributing
+
+Contributions to the Constellation project are welcome! Please refer to the `CONTRIBUTING.md` file for guidelines on how to contribute.
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
