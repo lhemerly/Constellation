@@ -2,6 +2,7 @@ package connection_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -84,19 +85,19 @@ func TestGRPCConnection(t *testing.T) {
 	t.Run("Sentinel Errors", func(t *testing.T) {
 		// Test ErrNotConnected on Send
 		err := (*conn).Send(ctx, []byte("data"))
-		if err != connection.ErrNotConnected {
+		if !errors.Is(err, connection.ErrNotConnected) {
 			t.Errorf("Expected ErrNotConnected, got %v", err)
 		}
 
 		// Test ErrNotConnected on Receive
 		_, err = (*conn).Receive(ctx)
-		if err != connection.ErrNotConnected {
+		if !errors.Is(err, connection.ErrNotConnected) {
 			t.Errorf("Expected ErrNotConnected, got %v", err)
 		}
 
 		// Test ErrNotConnected on Disconnect
 		err = (*conn).Disconnect()
-		if err != connection.ErrNotConnected {
+		if !errors.Is(err, connection.ErrNotConnected) {
 			t.Errorf("Expected ErrNotConnected, got %v", err)
 		}
 
@@ -105,10 +106,13 @@ func TestGRPCConnection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Connect failed: %v", err)
 		}
+		t.Cleanup(func() {
+			(*conn).Disconnect()
+		})
 
 		// Test ErrAlreadyConnected on Connect
 		err = (*conn).Connect(ctx)
-		if err != connection.ErrAlreadyConnected {
+		if !errors.Is(err, connection.ErrAlreadyConnected) {
 			t.Errorf("Expected ErrAlreadyConnected, got %v", err)
 		}
 	})

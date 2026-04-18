@@ -31,8 +31,8 @@
 //
 //	func main() {
 //	    // Create and initialize nodes
-//	    node1 := network.NewBaseNode("node-1")
-//	    node2 := network.NewBaseNode("node-2")
+//	    node1 := node.NewBaseNode("node-1")
+//	    node2 := node.NewBaseNode("node-2")
 //
 //	    if err := node1.Create(); err != nil {
 //	        fmt.Printf("Error creating node1: %v\n", err)
