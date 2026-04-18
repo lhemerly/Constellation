@@ -65,7 +65,7 @@ func (g *GRPCConnection) Disconnect() error {
 
 	err := g.conn.Close()
 	g.conn = nil
-	close(g.dataChan)
+	// Don't close dataChan here, as we may want to reconnect
 	return err
 }
 
