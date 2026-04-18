@@ -2,6 +2,7 @@ package connection_test
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -90,9 +91,10 @@ func TestConnectionFactory(t *testing.T) {
 		connectionType string
 		address        string
 		wantErr        bool
+		wantErrIs      error
 	}{
-		{"Valid gRPC Connection", "grpc", "bufnet", false},
-		{"Invalid Connection Type", "invalid", "bufnet", true},
+		{"Valid gRPC Connection", "grpc", "bufnet", false, nil},
+		{"Invalid Connection Type", "invalid", "bufnet", true, connection.ErrUnsupportedConnection},
 	}
 
 	for _, tt := range tests {
@@ -103,6 +105,13 @@ func TestConnectionFactory(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Errorf("NewConnection() error = %v, wantErr %v", err, tt.wantErr)
 				return
+			}
+			if tt.wantErrIs != nil {
+				if err == nil {
+					t.Errorf("NewConnection() expected error %v, got nil", tt.wantErrIs)
+				} else if !errors.Is(err, tt.wantErrIs) {
+					t.Errorf("NewConnection() expected error %v, got %v", tt.wantErrIs, err)
+				}
 			}
 			if !tt.wantErr && conn == nil {
 				t.Errorf("NewConnection() returned nil connection for valid type")

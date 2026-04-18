@@ -44,8 +44,12 @@ package connection
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
+
+// ErrUnsupportedConnection is returned when the requested connection type is not supported.
+var ErrUnsupportedConnection = errors.New("unsupported connection type")
 
 // Connection defines the interface for different types of connections
 type Connection interface {
@@ -71,6 +75,6 @@ func (f *ConnectionFactory) NewConnection(ctx context.Context, connectionType, a
 	case "grpc":
 		return NewGRPCConnection(ctx, address, opts...)
 	default:
-		return nil, fmt.Errorf("unsupported connection type: %s", connectionType)
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedConnection, connectionType)
 	}
 }
