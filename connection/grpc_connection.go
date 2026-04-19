@@ -51,6 +51,8 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	// Recreate channel to reset state for a new session
+	g.dataChan = make(chan []byte, 100)
 	return nil
 }
 
