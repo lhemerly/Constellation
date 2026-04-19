@@ -51,6 +51,8 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	// Recreate channel to reset state for a new session
+	g.dataChan = make(chan []byte, 100)
 	return nil
 }
 
@@ -65,7 +67,7 @@ func (g *GRPCConnection) Disconnect() error {
 
 	err := g.conn.Close()
 	g.conn = nil
-	// Don't close dataChan here, as we may want to reconnect
+	close(g.dataChan)
 	return err
 }
 
