@@ -10,10 +10,10 @@ import (
 
 // GRPCConnection implements the Connection interface for gRPC
 type GRPCConnection struct {
-	address string
-	conn    *grpc.ClientConn
-	opts    []grpc.DialOption
-	mu      sync.Mutex
+	address  string
+	conn     *grpc.ClientConn
+	opts     []grpc.DialOption
+	mu       sync.Mutex
 	dataChan chan []byte // Channel to simulate data transfer
 }
 
@@ -27,8 +27,8 @@ func NewGRPCConnection(ctx context.Context, address string, opts ...interface{})
 	}
 
 	conn := &GRPCConnection{
-		address: address,
-		opts:    grpcOpts,
+		address:  address,
+		opts:     grpcOpts,
 		dataChan: make(chan []byte, 100), // Buffer size of 100
 	}
 
@@ -42,7 +42,7 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	defer g.mu.Unlock()
 
 	if g.conn != nil {
-		return fmt.Errorf("already connected")
+		return ErrAlreadyConnected
 	}
 
 	conn, err := grpc.DialContext(ctx, g.address, g.opts...)
@@ -51,6 +51,8 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	}
 
 	g.conn = conn
+	// Recreate channel to reset state for a new session
+	g.dataChan = make(chan []byte, 100)
 	return nil
 }
 
@@ -60,7 +62,7 @@ func (g *GRPCConnection) Disconnect() error {
 	defer g.mu.Unlock()
 
 	if g.conn == nil {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
 
 	err := g.conn.Close()
@@ -79,9 +81,9 @@ func (g *GRPCConnection) IsConnected() bool {
 // Send sends data over the gRPC connection
 func (g *GRPCConnection) Send(ctx context.Context, data []byte) error {
 	if !g.IsConnected() {
-		return fmt.Errorf("not connected")
+		return ErrNotConnected
 	}
-	
+
 	select {
 	case g.dataChan <- data:
 		return nil
@@ -93,9 +95,9 @@ func (g *GRPCConnection) Send(ctx context.Context, data []byte) error {
 // Receive receives data from the gRPC connection
 func (g *GRPCConnection) Receive(ctx context.Context) ([]byte, error) {
 	if !g.IsConnected() {
-		return nil, fmt.Errorf("not connected")
+		return nil, ErrNotConnected
 	}
-	
+
 	select {
 	case data := <-g.dataChan:
 		return data, nil

@@ -6,36 +6,36 @@
 //
 // The main components of this package are:
 //
-//  - Connection: An interface that defines the common methods for all connection types.
-//  - ConnectionFactory: A factory for creating different types of connections.
-//  - GRPCConnection: An implementation of the Connection interface for gRPC connections.
+//   - Connection: An interface that defines the common methods for all connection types.
+//   - ConnectionFactory: A factory for creating different types of connections.
+//   - GRPCConnection: An implementation of the Connection interface for gRPC connections.
 //
 // Usage:
 //
-//  factory := connection.NewConnectionFactory()
-//  conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051")
-//  if err != nil {
-//      log.Fatalf("Failed to create connection: %v", err)
-//  }
+//	factory := connection.NewConnectionFactory()
+//	conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051")
+//	if err != nil {
+//	    log.Fatalf("Failed to create connection: %v", err)
+//	}
 //
-//  err = conn.Connect(ctx)
-//  if err != nil {
-//      log.Fatalf("Failed to connect: %v", err)
-//  }
+//	err = conn.Connect(ctx)
+//	if err != nil {
+//	    log.Fatalf("Failed to connect: %v", err)
+//	}
 //
-//  defer conn.Disconnect()
+//	defer conn.Disconnect()
 //
-//  err = conn.Send(ctx, []byte("Hello, server!"))
-//  if err != nil {
-//      log.Fatalf("Failed to send data: %v", err)
-//  }
+//	err = conn.Send(ctx, []byte("Hello, server!"))
+//	if err != nil {
+//	    log.Fatalf("Failed to send data: %v", err)
+//	}
 //
-//  data, err := conn.Receive(ctx)
-//  if err != nil {
-//      log.Fatalf("Failed to receive data: %v", err)
-//  }
+//	data, err := conn.Receive(ctx)
+//	if err != nil {
+//	    log.Fatalf("Failed to receive data: %v", err)
+//	}
 //
-//  fmt.Printf("Received: %s\n", string(data))
+//	fmt.Printf("Received: %s\n", string(data))
 //
 // This package is designed to be extensible. To add support for a new connection type,
 // implement the Connection interface and add a new case to the ConnectionFactory's
@@ -48,8 +48,14 @@ import (
 	"fmt"
 )
 
-// ErrUnsupportedConnection is returned when the requested connection type is not supported.
-var ErrUnsupportedConnection = errors.New("unsupported connection type")
+var (
+	// ErrUnsupportedConnection is returned when the requested connection type is not supported.
+	ErrUnsupportedConnection = errors.New("unsupported connection type")
+	// ErrNotConnected is returned when an operation is performed on a connection that is not connected.
+	ErrNotConnected = errors.New("not connected")
+	// ErrAlreadyConnected is returned when attempting to connect an already established connection.
+	ErrAlreadyConnected = errors.New("already connected")
+)
 
 // Connection defines the interface for different types of connections
 type Connection interface {
