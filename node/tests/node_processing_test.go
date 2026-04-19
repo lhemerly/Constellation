@@ -42,5 +42,9 @@ func TestBaseNodeDataProcessing(t *testing.T) {
 
 	wg.Wait()
 
-	cleanupNodes(t, nodes)
+	for i := 0; i < numNodes; i++ {
+		if err := nodes[i].Delete(); err != nil {
+			t.Fatalf("Node %d: Delete() error = %v", i, err)
+		}
+	}
 }

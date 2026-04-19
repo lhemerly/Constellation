@@ -30,7 +30,8 @@ func TestBaseNodeUniqueIdentification(t *testing.T) {
 		if nodes[i].GetID() != "node-"+fmt.Sprint(i) {
 			t.Errorf("Node %d: GetID() = %v, want %v", i, nodes[i].GetID(), "node-"+fmt.Sprint(i))
 		}
+		if err := nodes[i].Delete(); err != nil {
+			t.Fatalf("Node %d: Delete() error = %v", i, err)
+		}
 	}
-
-	cleanupNodes(t, nodes)
 }
