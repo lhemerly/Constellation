@@ -4,17 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"google.golang.org/grpc"
 )
 
 // GRPCConnection implements the Connection interface for gRPC
 type GRPCConnection struct {
-	address  string
-	conn     *grpc.ClientConn
-	opts     []grpc.DialOption
-	mu       sync.Mutex
-	dataChan chan []byte // Channel to simulate data transfer
+	address   string
+	conn      *grpc.ClientConn
+	opts      []grpc.DialOption
+	mu        sync.Mutex
+	connected atomic.Bool
+	dataChan  chan []byte // Channel to simulate data transfer
 }
 
 // NewGRPCConnection creates a new GRPCConnection
@@ -41,7 +43,7 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.conn != nil {
+	if g.connected.Load() {
 		return ErrAlreadyConnected
 	}
 
@@ -53,6 +55,7 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	g.conn = conn
 	// Recreate channel to reset state for a new session
 	g.dataChan = make(chan []byte, 100)
+	g.connected.Store(true)
 	return nil
 }
 
@@ -61,21 +64,22 @@ func (g *GRPCConnection) Disconnect() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if g.conn == nil {
+	if !g.connected.Load() {
 		return ErrNotConnected
 	}
 
 	err := g.conn.Close()
 	g.conn = nil
+	g.connected.Store(false)
 	close(g.dataChan)
 	return err
 }
 
 // IsConnected checks if the gRPC connection is established
 func (g *GRPCConnection) IsConnected() bool {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.conn != nil
+	// Optimization: Use atomic.Bool to prevent lock contention in hot paths
+	// since IsConnected is frequently called during Send/Receive loops.
+	return g.connected.Load()
 }
 
 // Send sends data over the gRPC connection
