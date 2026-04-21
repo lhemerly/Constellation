@@ -14,9 +14,10 @@ type GRPCConnection struct {
 	address   string
 	conn      *grpc.ClientConn
 	opts      []grpc.DialOption
-	mu        sync.Mutex
+	mu        sync.RWMutex
 	connected atomic.Bool
-	dataChan  chan []byte // Channel to simulate data transfer
+	dataChan  chan []byte    // Channel to simulate data transfer
+	doneChan  chan struct{}  // Closed by Disconnect to unblock in-flight Send/Receive
 }
 
 // NewGRPCConnection creates a new GRPCConnection
@@ -32,6 +33,7 @@ func NewGRPCConnection(ctx context.Context, address string, opts ...interface{})
 		address:  address,
 		opts:     grpcOpts,
 		dataChan: make(chan []byte, 100), // Buffer size of 100
+		doneChan: make(chan struct{}),
 	}
 
 	var c Connection = conn
@@ -53,8 +55,9 @@ func (g *GRPCConnection) Connect(ctx context.Context) error {
 	}
 
 	g.conn = conn
-	// Recreate channel to reset state for a new session
+	// Recreate channels to reset state for a new session
 	g.dataChan = make(chan []byte, 100)
+	g.doneChan = make(chan struct{})
 	g.connected.Store(true)
 	return nil
 }
@@ -71,8 +74,7 @@ func (g *GRPCConnection) Disconnect() error {
 	err := g.conn.Close()
 	g.conn = nil
 	g.connected.Store(false)
-	// Do not close dataChan here to prevent panics during concurrent Send/Receive
-	// when Disconnect is called, and to avoid close-of-closed-channel on reconnects.
+	close(g.doneChan) // Unblock any Send/Receive blocked on the channel
 	return err
 }
 
@@ -85,13 +87,20 @@ func (g *GRPCConnection) IsConnected() bool {
 
 // Send sends data over the gRPC connection
 func (g *GRPCConnection) Send(ctx context.Context, data []byte) error {
-	if !g.IsConnected() {
+	g.mu.RLock()
+	if !g.connected.Load() {
+		g.mu.RUnlock()
 		return ErrNotConnected
 	}
+	dataChan := g.dataChan
+	doneChan := g.doneChan
+	g.mu.RUnlock()
 
 	select {
-	case g.dataChan <- data:
+	case dataChan <- data:
 		return nil
+	case <-doneChan:
+		return ErrNotConnected
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -99,13 +108,20 @@ func (g *GRPCConnection) Send(ctx context.Context, data []byte) error {
 
 // Receive receives data from the gRPC connection
 func (g *GRPCConnection) Receive(ctx context.Context) ([]byte, error) {
-	if !g.IsConnected() {
+	g.mu.RLock()
+	if !g.connected.Load() {
+		g.mu.RUnlock()
 		return nil, ErrNotConnected
 	}
+	dataChan := g.dataChan
+	doneChan := g.doneChan
+	g.mu.RUnlock()
 
 	select {
-	case data := <-g.dataChan:
+	case data := <-dataChan:
 		return data, nil
+	case <-doneChan:
+		return nil, ErrNotConnected
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
