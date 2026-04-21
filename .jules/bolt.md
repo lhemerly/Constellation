@@ -1,0 +1,1 @@
+- When extending nodes, never hold the extending struct's mutex while invoking base struct methods that acquire the base mutex. Always calculate the necessary local state under the extending mutex, release it, and then call base methods.
