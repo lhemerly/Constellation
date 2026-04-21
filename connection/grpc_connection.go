@@ -71,7 +71,8 @@ func (g *GRPCConnection) Disconnect() error {
 	err := g.conn.Close()
 	g.conn = nil
 	g.connected.Store(false)
-	close(g.dataChan)
+	// Do not close dataChan here to prevent panics during concurrent Send/Receive
+	// when Disconnect is called, and to avoid close-of-closed-channel on reconnects.
 	return err
 }
 
