@@ -75,6 +75,7 @@ func (g *GRPCConnection) Disconnect() error {
 	}
 
 	err := g.conn.Close()
+	g.isConnected.Store(false)
 	g.conn = nil
 	g.isConnected.Store(false)
 	close(g.doneChan)
