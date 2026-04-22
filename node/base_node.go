@@ -5,23 +5,30 @@ import (
 	"sync/atomic"
 )
 
+// Middleware defines a function that wraps a process function.
+type Middleware func(func([]byte) ([]byte, error)) func([]byte) ([]byte, error)
+
 // BaseNode provides common functionality for all node types.
 type BaseNode struct {
 	id            string
 	subscriptions map[string]Node
 	mutex         sync.RWMutex
 	processFunc   func([]byte) ([]byte, error)
+	baseProcess   func([]byte) ([]byte, error)
+	middlewares   []Middleware
 	eventCounter  uint64 // Atomic counter for received events
 }
 
 // NewBaseNode creates a new BaseNode with a given ID.
 func NewBaseNode(id string) *BaseNode {
+	defaultProcess := func(input []byte) ([]byte, error) {
+		return input, nil // Default echo behavior
+	}
 	return &BaseNode{
 		id:            id,
 		subscriptions: make(map[string]Node),
-		processFunc: func(input []byte) ([]byte, error) {
-			return input, nil // Default echo behavior
-		},
+		baseProcess:   defaultProcess,
+		processFunc:   defaultProcess,
 	}
 }
 
@@ -47,7 +54,27 @@ func (n *BaseNode) Process(input []byte) ([]byte, error) {
 func (n *BaseNode) SetProcessFunc(processFunc func([]byte) ([]byte, error)) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
-	n.processFunc = processFunc
+	n.baseProcess = processFunc
+	n.rebuildProcessFunc()
+}
+
+// Use adds middlewares to the node's processing chain.
+func (n *BaseNode) Use(middlewares ...Middleware) {
+	n.mutex.Lock()
+	defer n.mutex.Unlock()
+	n.middlewares = append(n.middlewares, middlewares...)
+	n.rebuildProcessFunc()
+}
+
+// rebuildProcessFunc re-applies all middlewares to the base process function.
+// Must be called with the mutex locked.
+func (n *BaseNode) rebuildProcessFunc() {
+	fn := n.baseProcess
+	// Apply middlewares in reverse order so that the first middleware added is the outermost
+	for i := len(n.middlewares) - 1; i >= 0; i-- {
+		fn = n.middlewares[i](fn)
+	}
+	n.processFunc = fn
 }
 
 // Subscribe adds a node to the subscription list for event notifications.

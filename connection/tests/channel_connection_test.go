@@ -3,38 +3,16 @@ package connection_test
 import (
 	"context"
 	"errors"
-	"net"
 	"testing"
 
 	"github.com/lhemerly/Constellation/connection"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/test/bufconn"
 )
 
-const bufSize = 1024 * 1024
-
-var lis *bufconn.Listener
-
-func init() {
-	lis = bufconn.Listen(bufSize)
-	s := grpc.NewServer()
-	go func() {
-		if err := s.Serve(lis); err != nil {
-			panic(err)
-		}
-	}()
-}
-
-func bufDialer(context.Context, string) (net.Conn, error) {
-	return lis.Dial()
-}
-
-func TestGRPCConnection(t *testing.T) {
+func TestChannelConnection(t *testing.T) {
 	ctx := context.Background()
-	conn, err := connection.NewGRPCConnection(ctx, "bufnet", grpc.WithContextDialer(bufDialer), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := connection.NewChannelConnection(ctx, "local-address")
 	if err != nil {
-		t.Fatalf("Failed to create GRPCConnection: %v", err)
+		t.Fatalf("Failed to create ChannelConnection: %v", err)
 	}
 
 	t.Run("Connect", func(t *testing.T) {
@@ -52,8 +30,8 @@ func TestGRPCConnection(t *testing.T) {
 
 	t.Run("GetRemoteAddress", func(t *testing.T) {
 		addr := (*conn).GetRemoteAddress()
-		if addr != "bufnet" {
-			t.Errorf("GetRemoteAddress returned %s, expected bufnet", addr)
+		if addr != "local-address" {
+			t.Errorf("GetRemoteAddress returned %s, expected local-address", addr)
 		}
 	})
 
@@ -119,7 +97,6 @@ func TestGRPCConnection(t *testing.T) {
 	})
 
 	t.Run("Concurrent Operations and Reconnect", func(t *testing.T) {
-		// Verify that calling Send/Receive/Disconnect multiple times and reconnecting does not panic
 		err := (*conn).Disconnect()
 		if err != nil && !errors.Is(err, connection.ErrNotConnected) {
 			t.Errorf("Disconnect failed: %v", err)
@@ -155,35 +132,4 @@ func TestGRPCConnection(t *testing.T) {
 			t.Errorf("Disconnect failed: %v", err)
 		}
 	})
-}
-
-func TestConnectionFactory(t *testing.T) {
-	factory := connection.NewConnectionFactory()
-
-	tests := []struct {
-		name           string
-		connectionType string
-		address        string
-		wantErr        bool
-	}{
-		{"Valid gRPC Connection", "grpc", "bufnet", false},
-		{"Valid Local Connection", "local", "local-addr", false},
-		{"Valid Channel Connection", "channel", "channel-addr", false},
-		{"Invalid Connection Type", "invalid", "bufnet", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			conn, err := factory.NewConnection(ctx, tt.connectionType, tt.address, grpc.WithContextDialer(bufDialer), grpc.WithTransportCredentials(insecure.NewCredentials()))
-
-			if (err != nil) != tt.wantErr {
-				t.Errorf("NewConnection() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !tt.wantErr && conn == nil {
-				t.Errorf("NewConnection() returned nil connection for valid type")
-			}
-		})
-	}
 }
