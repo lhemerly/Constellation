@@ -14,3 +14,6 @@
 ## 2024-04-21 - Optimize GRPCConnection.IsConnected()
 **Learning:** Checking the connection state using `sync.Mutex` caused contention when `IsConnected()` was called repeatedly (e.g., in Send/Receive loops under high concurrency). The benchmark showed ~90ns/op with `sync.Mutex` overhead.
 **Action:** Replaced `sync.Mutex` lock/unlock in `IsConnected()` with an `atomic.Bool` (`isConnected.Load()`). Benchmark improved to ~0.67ns/op. Ensure that any future state checks in high-frequency hot paths utilize atomic operations when possible to avoid lock contention.
+## 2024-05-18 - Optimize Lock Contention in Notify Method
+**Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
+**Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
