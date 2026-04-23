@@ -56,7 +56,11 @@ func (f *FailoverNode) processFailover(input []byte) ([]byte, error) {
 
 	var primaryErr error
 	if primaryNode != nil {
-		res, err := primaryNode.Process(input)
+		// Clone input to prevent in-place modification by the primary node before fallback
+		inputCopy := make([]byte, len(input))
+		copy(inputCopy, input)
+
+		res, err := primaryNode.Process(inputCopy)
 		if err == nil {
 			return res, nil
 		}
@@ -64,6 +68,7 @@ func (f *FailoverNode) processFailover(input []byte) ([]byte, error) {
 	}
 
 	if fallbackNode != nil {
+		// We can safely use the original input buffer for the final fallback attempt
 		res, err := fallbackNode.Process(input)
 		if err == nil {
 			return res, nil

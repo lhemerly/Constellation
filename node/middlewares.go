@@ -33,7 +33,12 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			var output []byte
 
 			for i := 0; i <= retries; i++ {
-				output, err = next(input)
+				// Clone the input buffer for each attempt to avoid side effects
+				// from in-place modifications during a failed process attempt.
+				inputCopy := make([]byte, len(input))
+				copy(inputCopy, input)
+
+				output, err = next(inputCopy)
 				if err == nil {
 					return output, nil
 				}
