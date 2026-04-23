@@ -2,7 +2,7 @@
 
 [![codecov](https://codecov.io/gh/lhemerly/Constellation/branch/main/graph/badge.svg)](https://codecov.io/gh/lhemerly/Constellation)
 
-The Constellation project provides a robust framework for creating and managing networked systems. It consists of two main packages: `Constellation` for node management and `connection` for handling network connections.
+The Constellation project provides a robust framework for creating and managing networked systems. It consists of two main packages: `node` for node management and `connection` for handling network connections.
 
 ## Overview
 
@@ -10,9 +10,9 @@ This project is designed to offer a seamless developer experience with a focus o
 
 ## Packages
 
-### 1. Constellation Package
+### 1. Node Package
 
-The `Constellation` package provides abstractions for creating and managing nodes within a networked system. It includes core functionality for node lifecycle management, event handling, and inter-node communication, optimized for asynchronous operations and concurrency.
+The `node` package provides abstractions for creating and managing nodes within a networked system. It includes core functionality for node lifecycle management, event handling, and inter-node communication, optimized for asynchronous operations and concurrency.
 
 #### Key Components
 
@@ -25,6 +25,8 @@ The `Constellation` package provides abstractions for creating and managing node
 - Data Processing
 - Subscription Management
 - Event Notification
+- **Advanced Node Types**: Includes `FailoverNode` (primary/secondary logic), `LoadBalancerNode` (round-robin distribution), `PipelineNode` (sequential stage processing), and `RouterNode` (conditional message routing).
+- **Middlewares**: Supports composing node processing chains with middlewares such as `LoggingMiddleware`, `RetryMiddleware`, and `RecoveryMiddleware`.
 
 ### 2. Connection Package
 
@@ -44,31 +46,31 @@ The `connection` package provides an abstraction layer for network connections, 
 
 ## Usage Examples
 
-### Constellation Package
+### Node Package
 
 ```go
 package main
 
 import (
     "fmt"
-    "github.com/lhemerly/Constellation/network"
+    "github.com/lhemerly/Constellation/node"
 )
 
 func main() {
     // Create and initialize a new BaseNode
-    node := network.NewBaseNode("node-1")
-    if err := node.Create(); err != nil {
+    n := node.NewBaseNode("node-1")
+    if err := n.Create(); err != nil {
         fmt.Printf("Error creating node: %v\n", err)
         return
     }
 
     // Set a custom process function
-    node.SetProcessFunc(func(input []byte) ([]byte, error) {
+    n.SetProcessFunc(func(input []byte) ([]byte, error) {
         return []byte(fmt.Sprintf("Processed: %s", input)), nil
     })
 
     // Process data
-    output, err := node.Process([]byte("Hello, Node!"))
+    output, err := n.Process([]byte("Hello, Node!"))
     if err != nil {
         fmt.Printf("Error processing data: %v\n", err)
     } else {
@@ -76,7 +78,7 @@ func main() {
     }
 
     // Clean up the node
-    if err := node.Delete(); err != nil {
+    if err := n.Delete(); err != nil {
         fmt.Printf("Error deleting node: %v\n", err)
     }
 }
