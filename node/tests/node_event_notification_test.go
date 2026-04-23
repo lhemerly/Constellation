@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/lhemerly/Constellation/node"
 )
@@ -76,4 +77,56 @@ func TestBaseNodeEventNotification(t *testing.T) {
 	}
 
 	cleanupNodes(t, nodes)
+}
+
+// TestNotifyDoesNotDeadlockWhenProcessModifiesSubscriptions verifies that a
+// subscriber can safely call Subscribe or Unsubscribe on the notifying node
+// from within its Process method while Notify is in-flight.
+// Under the old implementation (RLock held across wg.Wait), calling
+// Subscribe/Unsubscribe from Process would deadlock because those methods
+// require a write lock. A timeout is used to detect any regression.
+func TestNotifyDoesNotDeadlockWhenProcessModifiesSubscriptions(t *testing.T) {
+	publisher := node.NewBaseNode("publisher")
+	if err := publisher.Create(); err != nil {
+		t.Fatalf("publisher.Create() error = %v", err)
+	}
+	defer publisher.Delete()
+
+	subscriber := node.NewBaseNode("subscriber")
+	if err := subscriber.Create(); err != nil {
+		t.Fatalf("subscriber.Create() error = %v", err)
+	}
+	defer subscriber.Delete()
+
+	// The subscriber's Process calls Unsubscribe then Subscribe back on the
+	// publisher. Under the old RLock-held-through-Wait implementation, this
+	// would deadlock because Subscribe/Unsubscribe require a write lock.
+	subscriber.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if err := publisher.Unsubscribe(subscriber); err != nil {
+			return nil, err
+		}
+		if err := publisher.Subscribe(subscriber); err != nil {
+			return nil, err
+		}
+		return input, nil
+	})
+
+	if err := publisher.Subscribe(subscriber); err != nil {
+		t.Fatalf("publisher.Subscribe() error = %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := publisher.Notify([]byte("event")); err != nil {
+			t.Errorf("Notify() error = %v", err)
+		}
+	}()
+
+	select {
+	case <-done:
+		// Notify completed without deadlock.
+	case <-time.After(5 * time.Second):
+		t.Fatal("Notify deadlocked: subscriber's Process could not modify subscriptions while Notify was in-flight")
+	}
 }
