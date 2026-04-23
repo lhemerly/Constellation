@@ -96,10 +96,15 @@ func (n *BaseNode) Unsubscribe(node Node) error {
 // Notify sends an event to all subscribed nodes and waits for all to complete.
 func (n *BaseNode) Notify(event []byte) error {
 	n.mutex.RLock()
-	defer n.mutex.RUnlock()
+	// Copy subscriptions to avoid holding the lock during potentially long-running or blocking Process calls
+	subs := make([]Node, 0, len(n.subscriptions))
+	for _, node := range n.subscriptions {
+		subs = append(subs, node)
+	}
+	n.mutex.RUnlock()
 
 	var wg sync.WaitGroup
-	for _, node := range n.subscriptions {
+	for _, node := range subs {
 		wg.Add(1)
 		go func(n Node) {
 			defer wg.Done()
