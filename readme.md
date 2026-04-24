@@ -2,7 +2,7 @@
 
 [![codecov](https://codecov.io/gh/lhemerly/Constellation/branch/main/graph/badge.svg)](https://codecov.io/gh/lhemerly/Constellation)
 
-The Constellation project provides a robust framework for creating and managing networked systems. It consists of two main packages: `node` for node management and `connection` for handling network connections.
+The Constellation project provides a robust framework for creating and managing networked systems. It consists of three main packages: `node` for node management, `connection` for handling network connections, and `event` for handling event dispatching and streaming.
 
 ## Overview
 
@@ -25,8 +25,8 @@ The `node` package provides abstractions for creating and managing nodes within 
 - Data Processing
 - Subscription Management
 - Event Notification
-- **Advanced Node Types**: Includes `FailoverNode` (primary/secondary logic), `LoadBalancerNode` (round-robin distribution), `PipelineNode` (sequential stage processing), and `RouterNode` (conditional message routing).
-- **Middlewares**: Supports composing node processing chains with middlewares such as `LoggingMiddleware`, `RetryMiddleware`, and `RecoveryMiddleware`.
+- **Advanced Node Types**: Includes `FailoverNode` (primary/secondary logic), `LoadBalancerNode` (round-robin distribution), `PipelineNode` (sequential stage processing), `RouterNode` (conditional message routing), and `MapReduceNode` (parallel mappers and a single reducer).
+- **Middlewares**: Supports composing node processing chains with middlewares such as `LoggingMiddleware`, `RetryMiddleware`, `RecoveryMiddleware`, `CacheMiddleware`, `TimeoutMiddleware`, and `CircuitBreakerMiddleware`.
 
 ### 2. Connection Package
 
@@ -37,12 +37,30 @@ The `connection` package provides an abstraction layer for network connections, 
 - **Connection Interface**: Defines common methods for all connection types.
 - **ConnectionFactory**: Factory for creating different types of connections.
 - **GRPCConnection**: Implementation of the Connection interface for gRPC connections.
+- **ChannelConnection**: Implementation of the Connection interface using Go channels for local, in-memory communication.
 
 #### Features
 
 - Protocol-agnostic connection management
-- Support for gRPC connections (extensible to other protocols)
+- Support for gRPC and local channel-based connections (extensible to other protocols)
 - Unified interface for sending and receiving data
+
+### 3. Event Package
+
+The `event` package provides interfaces and implementations for creating, dispatching, and handling events and streaming events within the Constellation system. It is designed for high concurrency and efficient streaming between nodes.
+
+#### Key Components
+
+- **Event Interface**: Defines the basic structure of an event.
+- **StreamEvent Interface**: Extends Event for streaming data between nodes.
+- **EventDispatcher**: Manages event listeners and dispatches events to them in a thread-safe, asynchronous manner.
+- **StreamEventDispatcher**: Extends EventDispatcher to handle streaming events.
+
+#### Features
+
+- High concurrency event dispatching
+- Support for regular events and streaming events
+- Asynchronous and thread-safe listener management
 
 ## Usage Examples
 
@@ -81,6 +99,40 @@ func main() {
     if err := n.Delete(); err != nil {
         fmt.Printf("Error deleting node: %v\n", err)
     }
+}
+```
+
+### Event Package
+
+```go
+package main
+
+import (
+    "fmt"
+    "time"
+    "github.com/lhemerly/Constellation/event"
+)
+
+func main() {
+    dispatcher := event.NewEventDispatcher()
+    dispatcher.RegisterListener("greet", func(e event.Event) {
+        fmt.Printf("Received event type=%s data=%s\n", e.GetType(), e.GetData())
+    })
+
+    evt := event.NewBaseEvent("greet", []byte("hello"))
+    dispatcher.Dispatch(evt)
+
+    // Streaming example
+    streamDisp := event.NewStreamEventDispatcher()
+    streamDisp.RegisterStreamListener("sensor", func(e event.StreamEvent) {
+        fmt.Printf("Stream chunk seq=%d data=%s\n", e.GetSequence(), e.GetData())
+    })
+
+    chunk := event.NewBaseStreamEvent("sensor", []byte("data-chunk"), 1, true)
+    streamDisp.DispatchStream(chunk)
+
+    // Give async dispatchers time to print before main exits
+    time.Sleep(100 * time.Millisecond)
 }
 ```
 
