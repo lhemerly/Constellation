@@ -69,3 +69,23 @@ func TestLoadBalancerNode_RemoveNode(t *testing.T) {
 		t.Errorf("expected remaining node to be dest-2, got %s", lb.GetNodes()[0].GetID())
 	}
 }
+
+func TestLoadBalancerNode_RemoveNonExistentNode(t *testing.T) {
+	lb := node.NewLoadBalancerNode("lb-rm-nonexistent")
+	node1 := node.NewBaseNode("dest-1")
+
+	var nodes []node.Node
+	nodes = append(nodes, lb, node1)
+	defer cleanupNodes(t, nodes)
+
+	lb.AddNode(node1)
+
+	lb.RemoveNode("non-existent-dest")
+
+	if len(lb.GetNodes()) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(lb.GetNodes()))
+	}
+	if lb.GetNodes()[0].GetID() != "dest-1" {
+		t.Errorf("expected remaining node to be dest-1, got %s", lb.GetNodes()[0].GetID())
+	}
+}
