@@ -82,3 +82,33 @@ func TestPipelineNode_ErrorPropagation(t *testing.T) {
 		t.Errorf("expected %v, got %v", expectedErr, err)
 	}
 }
+
+func TestPipelineNode_EmptyInput(t *testing.T) {
+	p := node.NewPipelineNode("pipe-empty-input")
+	node1 := node.NewBaseNode("stage-1")
+	node2 := node.NewBaseNode("stage-2")
+
+	var nodes []node.Node
+	nodes = append(nodes, p, node1, node2)
+	defer cleanupNodes(t, nodes)
+
+	node1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return append(input, []byte("stage1")...), nil
+	})
+	node2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return append(input, []byte("-stage2")...), nil
+	})
+
+	p.AddStage(node1)
+	p.AddStage(node2)
+
+	res, err := p.Process([]byte{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := "stage1-stage2"
+	if string(res) != expected {
+		t.Errorf("expected %s, got %s", expected, string(res))
+	}
+}
