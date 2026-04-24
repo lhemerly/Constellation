@@ -8,6 +8,27 @@ import (
 	"github.com/lhemerly/Constellation/event"
 )
 
+// TestEventDispatcher_NilData verifies that an event with nil data does not cause panics
+// and is correctly received by listeners.
+func TestEventDispatcher_NilData(t *testing.T) {
+	d := event.NewEventDispatcher()
+
+	var received event.Event
+	d.RegisterListener("niltest", func(e event.Event) {
+		received = e
+	})
+
+	evt := event.NewBaseEvent("niltest", nil)
+	d.Dispatch(evt)
+
+	if received == nil {
+		t.Fatal("listener was not called")
+	}
+	if received.GetData() != nil {
+		t.Errorf("GetData() = %q, want nil", received.GetData())
+	}
+}
+
 // TestEventDispatcher_RegisterAndDispatch verifies that a single listener
 // receives the dispatched event with the correct type and data.
 func TestEventDispatcher_RegisterAndDispatch(t *testing.T) {
