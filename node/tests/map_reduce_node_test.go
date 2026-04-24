@@ -39,9 +39,8 @@ func TestMapReduceNode_Success(t *testing.T) {
 	}
 
 	resultStr := string(res)
-	// Because of concurrency, the order of mapper results is non-deterministic.
-	// The result could be "TESTtest" or "testTEST".
-	if resultStr != "TESTtest" && resultStr != "testTEST" {
+	// Because we preallocate based on array index, the order is deterministic now
+	if resultStr != "TESTtest" {
 		t.Errorf("unexpected output: %s", resultStr)
 	}
 }
