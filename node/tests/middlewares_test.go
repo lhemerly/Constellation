@@ -176,51 +176,6 @@ func TestMiddlewares_CircuitBreaker(t *testing.T) {
 	}
 }
 
-func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
-	n := node.NewBaseNode("cb-empty-node")
-	defer cleanupNodes(t, []node.Node{n})
-
-	cooldown := 5 * time.Second
-	n.Use(node.CircuitBreakerMiddleware(2, cooldown))
-
-	var fail bool
-	n.SetProcessFunc(func(input []byte) ([]byte, error) {
-		if len(input) != 0 {
-			t.Errorf("expected empty input, got %d bytes", len(input))
-		}
-		if fail {
-			return nil, errors.New("simulated error")
-		}
-		return []byte("success"), nil
-	})
-
-	// 1. Initially successful requests with empty input
-	res, err := n.Process([]byte{})
-	if err != nil {
-		t.Fatalf("expected nil error, got %v", err)
-	}
-	if string(res) != "success" {
-		t.Errorf("expected success, got %s", string(res))
-	}
-
-	// 2. Trigger failures with empty input
-	fail = true
-	_, err = n.Process([]byte{}) // Failure 1
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	_, err = n.Process([]byte{}) // Failure 2 (Open circuit)
-	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-
-	// 3. Circuit is open, should return ErrCircuitBreakerOpen immediately for empty input
-	_, err = n.Process([]byte{})
-	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
-		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
-	}
-}
-
 func TestMiddlewares_Cache(t *testing.T) {
 	n := node.NewBaseNode("cache-node")
 	defer cleanupNodes(t, []node.Node{n})
@@ -315,3 +270,47 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
+	n := node.NewBaseNode("cb-empty-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	cooldown := 50 * time.Millisecond
+	n.Use(node.CircuitBreakerMiddleware(2, cooldown))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		if len(input) != 0 {
+			t.Errorf("expected empty input, got %d bytes", len(input))
+		}
+		return []byte("success"), nil
+	})
+
+	// 1. Initially successful requests with empty input
+	res, err := n.Process([]byte{})
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Trigger failures with empty input
+	fail = true
+	_, err = n.Process([]byte{}) // Failure 1
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	_, err = n.Process([]byte{}) // Failure 2 (Open circuit)
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// 3. Circuit is open, should return ErrCircuitBreakerOpen immediately for empty input
+	_, err = n.Process([]byte{})
+	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
+		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
