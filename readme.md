@@ -109,6 +109,7 @@ package main
 
 import (
     "fmt"
+    "time"
     "github.com/lhemerly/Constellation/event"
 )
 
@@ -129,6 +130,9 @@ func main() {
 
     chunk := event.NewBaseStreamEvent("sensor", []byte("data-chunk"), 1, true)
     streamDisp.DispatchStream(chunk)
+
+    // Give async dispatchers time to print before main exits
+    time.Sleep(100 * time.Millisecond)
 }
 ```
 
