@@ -29,6 +29,78 @@ func TestEventDispatcher_NilData(t *testing.T) {
 	}
 }
 
+func TestEventDispatcher_PatternMatching(t *testing.T) {
+	dispatcher := event.NewEventDispatcher()
+	var (
+		mu           sync.Mutex
+		matchedTypes []string
+	)
+
+	// Register a listener with a pattern
+	dispatcher.RegisterListener("sensor.*.temperature", func(e event.Event) {
+		mu.Lock()
+		matchedTypes = append(matchedTypes, e.GetType())
+		mu.Unlock()
+	})
+
+	dispatcher.RegisterListener("sensor.kitchen.*", func(e event.Event) {
+		mu.Lock()
+		matchedTypes = append(matchedTypes, e.GetType())
+		mu.Unlock()
+	})
+
+	dispatcher.RegisterListener("*", func(e event.Event) {
+		mu.Lock()
+		matchedTypes = append(matchedTypes, "wildcard:"+e.GetType())
+		mu.Unlock()
+	})
+
+	dispatcher.RegisterListener("sensor", func(e event.Event) {
+		mu.Lock()
+		matchedTypes = append(matchedTypes, "exact:"+e.GetType())
+		mu.Unlock()
+	})
+
+	// Dispatch an event matching "sensor.*.temperature"
+	dispatcher.Dispatch(event.NewBaseEvent("sensor.livingroom.temperature", nil))
+
+	// Dispatch an event matching "sensor.kitchen.*"
+	dispatcher.Dispatch(event.NewBaseEvent("sensor.kitchen.humidity", nil))
+
+	// Dispatch an exact event
+	dispatcher.Dispatch(event.NewBaseEvent("sensor", nil))
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// "sensor.livingroom.temperature" should match "sensor.*.temperature" and "*"
+	// "sensor.kitchen.humidity" should match "sensor.kitchen.*" and "*"
+	// "sensor" should match "sensor" and "*"
+
+	if len(matchedTypes) != 6 {
+		t.Fatalf("expected 6 matches, got %d. Matches: %v", len(matchedTypes), matchedTypes)
+	}
+
+	expectedMatches := map[string]bool{
+		"sensor.livingroom.temperature":          false,
+		"wildcard:sensor.livingroom.temperature": false,
+		"sensor.kitchen.humidity":                false,
+		"wildcard:sensor.kitchen.humidity":       false,
+		"exact:sensor":                           false,
+		"wildcard:sensor":                        false,
+	}
+
+	for _, m := range matchedTypes {
+		expectedMatches[m] = true
+	}
+
+	for k, v := range expectedMatches {
+		if !v {
+			t.Errorf("expected match %s was not triggered", k)
+		}
+	}
+}
+
 // TestEventDispatcher_RegisterAndDispatch verifies that a single listener
 // receives the dispatched event with the correct type and data.
 func TestEventDispatcher_RegisterAndDispatch(t *testing.T) {

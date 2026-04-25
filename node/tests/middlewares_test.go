@@ -241,6 +241,53 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 5 tokens per second, burst of 2
+	n.Use(node.RateLimiterMiddleware(5, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Burst capacity is 2, so the first 2 should succeed immediately.
+	for i := 0; i < 2; i++ {
+		res, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("unexpected error on burst request %d: %v", i+1, err)
+		}
+		if string(res) != "success" {
+			t.Errorf("expected success, got %s", string(res))
+		}
+	}
+
+	// 3rd request should fail as bucket is empty and hasn't refilled
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait 200ms to accumulate 1 token (5 tokens/sec = 1 token per 200ms)
+	time.Sleep(210 * time.Millisecond)
+
+	// Now 1 request should succeed
+	res, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error after waiting: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// Next request should fail again
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
