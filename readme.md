@@ -53,6 +53,8 @@ The `event` package provides interfaces and implementations for creating, dispat
 
 - **Event Interface**: Defines the basic structure of an event.
 - **StreamEvent Interface**: Extends Event for streaming data between nodes.
+- **BaseEvent Struct**: Concrete implementation of the Event interface.
+- **BaseStreamEvent Struct**: Concrete implementation of the StreamEvent interface.
 - **EventDispatcher**: Manages event listeners and dispatches events to them in a thread-safe, asynchronous manner.
 - **StreamEventDispatcher**: Extends EventDispatcher to handle streaming events.
 
@@ -181,7 +183,7 @@ func main() {
 
 ## Testing
 
-Both packages include comprehensive tests to ensure correct functionality. Run the tests using the `go test` command:
+All three packages include comprehensive tests to ensure correct functionality. Run the tests using the `go test` command:
 
 ```sh
 go test ./...
