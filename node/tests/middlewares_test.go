@@ -314,3 +314,63 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestRateLimitMiddleware(t *testing.T) {
+	mockProcess := func(input []byte) ([]byte, error) {
+		return input, nil
+	}
+
+	// 10 tokens per second, max 1 burst
+	rateLimiter := node.RateLimitMiddleware(10, 1)
+	process := rateLimiter(mockProcess)
+
+	// First request should succeed
+	_, err := process([]byte("test"))
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	// Second request immediately after should fail (exceed capacity)
+	_, err = process([]byte("test"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("Expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for a token to be refilled (1/10th of a sec + a little extra)
+	time.Sleep(150 * time.Millisecond)
+
+	// Third request should succeed
+	_, err = process([]byte("test"))
+	if err != nil {
+		t.Fatalf("Expected no error after waiting, got %v", err)
+	}
+}
+
+func TestFilterMiddleware(t *testing.T) {
+	mockProcess := func(input []byte) ([]byte, error) {
+		return input, nil
+	}
+
+	// Predicate: only pass inputs longer than 3 bytes
+	predicate := func(input []byte) bool {
+		return len(input) > 3
+	}
+
+	filter := node.FilterMiddleware(predicate)
+	process := filter(mockProcess)
+
+	// Should succeed (length 4 > 3)
+	out, err := process([]byte("abcd"))
+	if err != nil {
+		t.Fatalf("Expected no error for passing input, got %v", err)
+	}
+	if string(out) != "abcd" {
+		t.Fatalf("Expected output abcd, got %s", out)
+	}
+
+	// Should fail (length 3 <= 3)
+	_, err = process([]byte("abc"))
+	if !errors.Is(err, node.ErrMessageFiltered) {
+		t.Fatalf("Expected ErrMessageFiltered, got %v", err)
+	}
+}
