@@ -1,8 +1,11 @@
 package node_test
 
 import (
+	"bytes"
 	"errors"
 	"github.com/lhemerly/Constellation/node"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -312,5 +315,149 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMiddlewares_Filter(t *testing.T) {
+	n := node.NewBaseNode("filter-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.FilterMiddleware(func(input []byte) bool {
+		return string(input) == "valid"
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("processed"), nil
+	})
+
+	// Valid input
+	res, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "processed" {
+		t.Errorf("expected processed, got %s", string(res))
+	}
+
+	// Invalid input
+	res, err = n.Process([]byte("invalid"))
+	if !errors.Is(err, node.ErrFiltered) {
+		t.Fatalf("expected ErrFiltered, got %v", err)
+	}
+	if res != nil {
+		t.Errorf("expected nil result, got %s", string(res))
+	}
+}
+
+func TestMiddlewares_ConcurrencyLimit(t *testing.T) {
+	n := node.NewBaseNode("concurrency-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.ConcurrencyLimitMiddleware(2))
+
+	var currentConcurrent int32
+	var maxObservedConcurrent int32
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// Increment concurrent counter
+		current := atomic.AddInt32(&currentConcurrent, 1)
+		defer atomic.AddInt32(&currentConcurrent, -1)
+
+		// Record max observed
+		for {
+			maxObserved := atomic.LoadInt32(&maxObservedConcurrent)
+			if current <= maxObserved {
+				break
+			}
+			if atomic.CompareAndSwapInt32(&maxObservedConcurrent, maxObserved, current) {
+				break
+			}
+		}
+
+		time.Sleep(10 * time.Millisecond) // Simulate work
+		return []byte("done"), nil
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = n.Process([]byte("input"))
+		}()
+	}
+	wg.Wait()
+
+	if maxObservedConcurrent > 2 {
+		t.Errorf("expected max concurrency to be 2 or less, got %d", maxObservedConcurrent)
+	}
+}
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 10 requests per second
+	n.Use(node.RateLimitMiddleware(10))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("ok"), nil
+	})
+
+	// Consume all 10 tokens immediately
+	for i := 0; i < 10; i++ {
+		_, err := n.Process([]byte("req"))
+		if err != nil {
+			t.Fatalf("unexpected error on request %d: %v", i, err)
+		}
+	}
+
+	// The 11th request should hit the rate limit
+	_, err := n.Process([]byte("req"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
+
+func TestMiddlewares_Compression(t *testing.T) {
+	n := node.NewBaseNode("compression-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.CompressionMiddleware())
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// The input should be decompressed
+		if string(input) != "raw data" {
+			t.Errorf("expected decompressed 'raw data', got '%s'", string(input))
+		}
+		return []byte("processed data"), nil
+	})
+
+	// Process without compression first, middleware should pass it as is (since it's not valid gzip)
+	res1, err := n.Process([]byte("raw data"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Output should be compressed gzip
+	if bytes.HasPrefix(res1, []byte("processed data")) {
+		t.Fatalf("expected compressed output, got plain text")
+	}
+
+	// Now pass the compressed output back in
+	// CompressionMiddleware should decompress it
+	n2 := node.NewBaseNode("compression-node-2")
+	defer cleanupNodes(t, []node.Node{n2})
+	n2.Use(node.CompressionMiddleware())
+	n2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) != "processed data" {
+			t.Errorf("expected decompressed 'processed data', got '%s'", string(input))
+		}
+		return []byte("done"), nil
+	})
+
+	_, err = n2.Process(res1)
+	if err != nil {
+		t.Fatalf("unexpected error on second process: %v", err)
 	}
 }

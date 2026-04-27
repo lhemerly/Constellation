@@ -1,9 +1,12 @@
 package node
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -57,6 +60,112 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+var (
+	ErrFiltered             = errors.New("input filtered out")
+	ErrRateLimitExceeded    = errors.New("rate limit exceeded")
+)
+
+// FilterMiddleware filters out inputs that do not satisfy the predicate function.
+func FilterMiddleware(predicate func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !predicate(input) {
+				return nil, ErrFiltered
+			}
+			return next(input)
+		}
+	}
+}
+
+// ConcurrencyLimitMiddleware limits the number of concurrent executions of the processing function.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			return next(input)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the rate of processing using a simple token bucket.
+func RateLimitMiddleware(requestsPerSecond int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int
+		lastRefill time.Time
+	)
+	tokens = requestsPerSecond
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := int(elapsed.Seconds() * float64(requestsPerSecond))
+
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > requestsPerSecond {
+					tokens = requestsPerSecond
+				}
+				lastRefill = now
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// CompressionMiddleware compresses the output and decompresses the input.
+// This is a basic implementation placeholder. In a real scenario, you'd use compress/gzip.
+
+func CompressionMiddleware() Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			// Decompress input
+			reader, err := gzip.NewReader(bytes.NewReader(input))
+			var decompressedInput []byte
+			if err == nil {
+				decompressedInput, err = io.ReadAll(reader)
+				reader.Close()
+			}
+
+			// If decompression fails (e.g. not gzip data), just use the original input
+			if err != nil {
+				decompressedInput = input
+			}
+
+			// Process
+			output, err := next(decompressedInput)
+			if err != nil || output == nil {
+				return output, err
+			}
+
+			// Compress output
+			var buf bytes.Buffer
+			writer := gzip.NewWriter(&buf)
+			_, err = writer.Write(output)
+			if err != nil {
+				writer.Close()
+				return output, err
+			}
+			writer.Close()
+			return buf.Bytes(), nil
 		}
 	}
 }
