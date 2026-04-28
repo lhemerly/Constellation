@@ -1,9 +1,13 @@
 package node
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -210,6 +214,99 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			}
 
 			return output, err
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the rate of processing requests using a token bucket.
+// rate is the number of tokens added per second, burst is the maximum bucket size.
+func RateLimiterMiddleware(rate float64, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+
+			// Replenish tokens
+			tokens += elapsed * rate
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastUpdate = now
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, errors.New("rate limit exceeded")
+			}
+
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// EncryptionMiddleware encrypts the output and decrypts the input using AES-GCM.
+// The key must be 16, 24, or 32 bytes for AES-128, AES-192, or AES-256 respectively.
+func EncryptionMiddleware(key []byte) Middleware {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		panic(err) // Initialization panic, standard for invalid key setup
+	}
+
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		panic(err)
+	}
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			// Try to decrypt the input
+			var decryptedInput []byte
+			// Check if we should enforce encryption on the input
+			// As this is a middleware in a chain, the very first input might be completely unencrypted,
+			// or it might be coming from another node. We must allow unencrypted inputs if they
+			// fail to decrypt but ONLY if it's considered raw data. For strictness, if it fails
+			// decryption, we will return error, BUT if it is short, we could assume it's raw.
+			// Wait, the test uses "secret message" which is short and returns "decryption failed"
+			// because it IS long enough to be a nonce but fails decryption, OR it's short.
+			// Let's modify the test or the middleware. The easiest is that EncryptionMiddleware assumes
+			// the node *receives* encrypted messages (from another node over wire) and *outputs* encrypted messages.
+			// If a message cannot be decrypted, it's an error.
+			if len(input) >= aesgcm.NonceSize() {
+				nonce := input[:aesgcm.NonceSize()]
+				ciphertext := input[aesgcm.NonceSize():]
+				var decErr error
+				decryptedInput, decErr = aesgcm.Open(nil, nonce, ciphertext, nil)
+				if decErr != nil {
+					// In our test, "secret message" is 14 bytes long.
+					// Nonce is 12 bytes. So it's >= 12, but decryption fails.
+					return nil, errors.Join(errors.New("decryption failed"), decErr)
+				}
+			} else {
+				return nil, errors.New("input too short to contain nonce")
+			}
+
+			// Process decrypted data
+			output, err := next(decryptedInput)
+			if err != nil {
+				return nil, err
+			}
+
+			// Encrypt output
+			nonce := make([]byte, aesgcm.NonceSize())
+			if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+				return nil, err
+			}
+			encryptedOutput := aesgcm.Seal(nonce, nonce, output, nil)
+			return encryptedOutput, nil
 		}
 	}
 }
