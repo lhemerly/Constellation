@@ -1,6 +1,9 @@
 package node_test
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"errors"
 	"github.com/lhemerly/Constellation/node"
 	"testing"
@@ -312,5 +315,140 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestRateLimiterMiddleware(t *testing.T) {
+	n := node.NewBaseNode("rate_limited_node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 5 requests burst, 1 request per second replenishment
+	rateLimiter := node.RateLimiterMiddleware(1.0, 5)
+	n.Use(rateLimiter)
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	// Fire 5 requests immediately, all should pass
+	for i := 0; i < 5; i++ {
+		_, err := n.Process([]byte("test"))
+		if err != nil {
+			t.Fatalf("Expected no error for burst request %d, got %v", i, err)
+		}
+	}
+
+	// Fire the 6th request immediately, it should fail
+	_, err := n.Process([]byte("test"))
+	if err == nil {
+		t.Fatalf("Expected error for request exceeding burst limit, got nil")
+	}
+
+	// Wait 1.1 second to replenish 1 token
+	time.Sleep(1100 * time.Millisecond)
+
+	// Fire another request, it should pass
+	_, err = n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("Expected no error after token replenishment, got %v", err)
+	}
+
+	// And the next one should fail again
+	_, err = n.Process([]byte("test"))
+	if err == nil {
+		t.Fatalf("Expected error after consuming replenished token, got nil")
+	}
+}
+
+func TestEncryptionMiddleware(t *testing.T) {
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	encMiddleware := node.EncryptionMiddleware(key)
+
+	node1 := node.NewBaseNode("sender_node")
+	defer cleanupNodes(t, []node.Node{node1})
+	node1.Use(encMiddleware)
+	node1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// Outputting raw input, but middleware will encrypt it
+		return input, nil
+	})
+
+	node2 := node.NewBaseNode("receiver_node")
+	defer cleanupNodes(t, []node.Node{node2})
+	node2.Use(encMiddleware)
+	node2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// The middleware will decrypt the input.
+		// We return it prefixed to verify we processed the decrypted data.
+		res := append([]byte("processed: "), input...)
+		return res, nil
+	})
+
+	// Node 1 processing
+	originalMsg := []byte("secret message")
+
+	// Since we send 'originalMsg' into node1.Process(), node1's middleware will try to DECRYPT it.
+	// But it's not encrypted! We need node1 to be the one that encrypts.
+	// We can manually encrypt it first, OR change the test.
+	// Actually, the simplest way to test is to just encrypt the initial message ourselves,
+	// pass it to node1, and node1 decrypts it, processes it, and re-encrypts it.
+
+	block, _ := aes.NewCipher(key)
+	aesgcm, _ := cipher.NewGCM(block)
+
+	nonce := make([]byte, aesgcm.NonceSize())
+	rand.Read(nonce)
+	encryptedOriginalMsg := aesgcm.Seal(nonce, nonce, originalMsg, nil)
+
+	// node1 decrypts encryptedOriginalMsg, processes it, and encrypts the output
+	encryptedMsg, err := node1.Process(encryptedOriginalMsg)
+	if err != nil {
+		t.Fatalf("Expected no error on encryption, got %v", err)
+	}
+
+	if string(encryptedMsg) == string(originalMsg) {
+		t.Fatalf("Expected encrypted output to differ from original input")
+	}
+
+	// Node 2 processing
+	// pass encryptedMsg to node2, it should decrypt it, process it, and re-encrypt the result
+	encryptedResult, err := node2.Process(encryptedMsg)
+	if err != nil {
+		t.Fatalf("Expected no error on decryption/processing, got %v", err)
+	}
+
+	// Decrypt the result manually to verify it
+	// We already have block and aesgcm above
+
+	nonceSize := aesgcm.NonceSize()
+	if len(encryptedResult) < nonceSize {
+		t.Fatalf("Encrypted result too short")
+	}
+	nonce2 := encryptedResult[:nonceSize]
+	ciphertext := encryptedResult[nonceSize:]
+
+	decryptedResult, err := aesgcm.Open(nil, nonce2, ciphertext, nil)
+	if err != nil {
+		t.Fatalf("Failed to decrypt final result: %v", err)
+	}
+
+	expectedResult := "processed: secret message"
+	if string(decryptedResult) != expectedResult {
+		t.Fatalf("Expected %q, got %q", expectedResult, string(decryptedResult))
+	}
+}
+
+func TestEncryptionMiddleware_InvalidInput(t *testing.T) {
+	key := make([]byte, 32)
+	rand.Read(key)
+
+	encMiddleware := node.EncryptionMiddleware(key)
+	n := node.NewBaseNode("node")
+	defer cleanupNodes(t, []node.Node{n})
+	n.Use(encMiddleware)
+
+	// Process unencrypted message, should fail
+	_, err := n.Process([]byte("unencrypted"))
+	if err == nil {
+		t.Fatalf("Expected error when processing unencrypted/invalid message")
 	}
 }
