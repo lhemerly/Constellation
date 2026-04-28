@@ -37,18 +37,19 @@ func NewMapReduceNode(id string, mappers []Node, reducer Node) *MapReduceNode {
 // mapReduceProcess handles the map-reduce lifecycle.
 func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		errs    []error
-		results [][]byte
+		wg       sync.WaitGroup
+		errs     []error
+		errMu    sync.Mutex
+		results  = make([][]byte, len(mr.mappers))
+		totalLen int
 	)
 
 	// Step 1: Map
 	// The input is broadcasted to all mappers.
 	// For a more advanced implementation, the input could be split into chunks.
-	for _, mapper := range mr.mappers {
-		wg.Add(1)
-		go func(m Node) {
+	wg.Add(len(mr.mappers))
+	for i, mapper := range mr.mappers {
+		go func(m Node, index int) {
 			defer wg.Done()
 
 			// Clone input to prevent data races
@@ -57,14 +58,16 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 
 			res, err := m.Process(inputCopy)
 
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				errMu.Lock()
 				errs = append(errs, err)
+				errMu.Unlock()
 			} else {
-				results = append(results, res)
+				// Assigning by index avoids mutex contention on the happy path
+				// and guarantees deterministic order of results
+				results[index] = res
 			}
-		}(mapper)
+		}(mapper, i)
 	}
 
 	wg.Wait()
@@ -73,9 +76,14 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 		return nil, errors.Join(append([]error{errors.New("map phase failed")}, errs...)...)
 	}
 
+	// Pre-calculate total length to allocate slice exactly once
+	for _, res := range results {
+		totalLen += len(res)
+	}
+
 	// Flatten results into a single byte slice for the reducer
 	// Format: simple concatenation for this basic implementation.
-	var reducedInput []byte
+	reducedInput := make([]byte, 0, totalLen)
 	for _, res := range results {
 		reducedInput = append(reducedInput, res...)
 	}
