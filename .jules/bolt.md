@@ -17,3 +17,6 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+## 2024-05-19 - Optimize Lock Contention in MapReduceNode
+**Learning:** Using `append` protected by a `sync.Mutex` inside a loop that spawns multiple concurrent goroutines (like the mapping phase in `MapReduceNode`) introduces unnecessary lock contention.
+**Action:** Always pre-allocate the result slices based on the known count of goroutines and assign the results by index to eliminate the need for a mutex. This not only avoids lock contention but also guarantees a deterministic order for the results.
