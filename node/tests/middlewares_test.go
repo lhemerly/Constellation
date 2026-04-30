@@ -270,6 +270,116 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Capacity 2, refill 1 token every 50ms
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two should succeed immediately
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error on req1, got %v", err)
+	}
+
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error on req2, got %v", err)
+	}
+
+	// Third should fail immediately because capacity is 2
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded on req3, got %v", err)
+	}
+
+	// Wait for a refill
+	time.Sleep(60 * time.Millisecond)
+
+	// Fourth should succeed
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error on req4 after wait, got %v", err)
+	}
+}
+
+func TestMiddlewares_Fallback(t *testing.T) {
+	n := node.NewBaseNode("fallback-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	fallbackTriggered := false
+	n.Use(node.FallbackMiddleware(func(input []byte, err error) ([]byte, error) {
+		fallbackTriggered = true
+		return []byte("fallback"), nil
+	}))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if fail {
+			return nil, errors.New("simulated failure")
+		}
+		return []byte("success"), nil
+	})
+
+	// Success case
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+	if fallbackTriggered {
+		t.Errorf("expected fallback not to be triggered")
+	}
+
+	// Failure case triggers fallback
+	fail = true
+	res, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error from fallback, got %v", err)
+	}
+	if string(res) != "fallback" {
+		t.Errorf("expected fallback, got %s", string(res))
+	}
+	if !fallbackTriggered {
+		t.Errorf("expected fallback to be triggered")
+	}
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.ValidatorMiddleware(func(input []byte) bool {
+		return string(input) == "valid"
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Valid input
+	res, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// Invalid input
+	_, err = n.Process([]byte("invalid"))
+	if !errors.Is(err, node.ErrInvalidInput) {
+		t.Fatalf("expected ErrInvalidInput, got %v", err)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})

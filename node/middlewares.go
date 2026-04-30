@@ -12,6 +12,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrInvalidInput       = errors.New("invalid input")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,73 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests processed within a given duration using a token bucket.
+func RateLimitMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = capacity
+		lastRefill time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			// Refill tokens
+			now := time.Now()
+			if !lastRefill.IsZero() {
+				elapsed := now.Sub(lastRefill)
+				refillTokens := int(elapsed / refillRate)
+				if refillTokens > 0 {
+					tokens += refillTokens
+					if tokens > capacity {
+						tokens = capacity
+					}
+					// Advance lastRefill by the exact interval added to avoid drift
+					lastRefill = lastRefill.Add(time.Duration(refillTokens) * refillRate)
+				}
+			} else {
+				lastRefill = now
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// FallbackMiddleware provides a fallback response if the main processing function fails.
+func FallbackMiddleware(fallback func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallback(input, err)
+			}
+			return output, nil
+		}
+	}
+}
+
+// ValidatorMiddleware validates the input using a provided validation function before processing.
+func ValidatorMiddleware(validator func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !validator(input) {
+				return nil, ErrInvalidInput
+			}
+			return next(input)
 		}
 	}
 }
