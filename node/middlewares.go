@@ -10,8 +10,10 @@ import (
 )
 
 var (
-	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
-	ErrProcessTimeout     = errors.New("process timed out")
+	ErrCircuitBreakerOpen      = errors.New("circuit breaker is open")
+	ErrProcessTimeout          = errors.New("process timed out")
+	ErrRateLimitExceeded       = errors.New("rate limit exceeded")
+	ErrConcurrencyLimitReached = errors.New("concurrency limit reached")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,55 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware restricts the number of requests processed per second
+// using a simple token bucket algorithm.
+func RateLimitMiddleware(requestsPerSecond int) Middleware {
+	if requestsPerSecond <= 0 {
+		panic("RateLimitMiddleware requires requestsPerSecond > 0")
+	}
+
+	interval := time.Second / time.Duration(requestsPerSecond)
+
+	// Create a channel that will receive a token every 'interval'
+	ticker := time.NewTicker(interval)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case <-ticker.C:
+				return next(input)
+			default:
+				// If we can't get a token immediately, the rate limit is exceeded
+				return nil, ErrRateLimitExceeded
+			}
+		}
+	}
+}
+
+// ConcurrencyLimitMiddleware limits the maximum number of simultaneous
+// Process executions allowed for a node.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	if maxConcurrent <= 0 {
+		panic("ConcurrencyLimitMiddleware requires maxConcurrent > 0")
+	}
+
+	// Use a buffered channel as a semaphore
+	semaphore := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case semaphore <- struct{}{}:
+				// Acquired a slot, make sure to release it when done
+				defer func() { <-semaphore }()
+				return next(input)
+			default:
+				return nil, ErrConcurrencyLimitReached
+			}
 		}
 	}
 }
