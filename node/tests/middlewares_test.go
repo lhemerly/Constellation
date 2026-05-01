@@ -3,6 +3,7 @@ package node_test
 import (
 	"errors"
 	"github.com/lhemerly/Constellation/node"
+	"sync"
 	"testing"
 	"time"
 )
@@ -313,4 +314,112 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
+}
+
+func TestRateLimitMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test-rate-limit")
+	defer cleanupNodes(t, []node.Node{n})
+
+	processCount := 0
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		processCount++
+		return input, nil
+	})
+
+	// Set a very low rate limit for testing
+	n.Use(node.RateLimitMiddleware(10))
+
+	// The first request will probably fail because the ticker hasn't fired yet
+	// Let's wait a bit to guarantee we have a token
+	time.Sleep(150 * time.Millisecond)
+
+	_, err := n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Immediate next request should fail
+	_, err = n.Process([]byte("test"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("Expected ErrRateLimitExceeded, got: %v", err)
+	}
+}
+
+func TestRateLimitMiddleware_PanicOnInvalidConfig(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid config, but none occurred")
+		}
+	}()
+
+	node.RateLimitMiddleware(0)
+}
+
+func TestConcurrencyLimitMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test-concurrency-limit")
+	defer cleanupNodes(t, []node.Node{n})
+
+	var wg sync.WaitGroup
+	readyChan := make(chan struct{})
+	unblockChan := make(chan struct{})
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// Signal that we are processing
+		readyChan <- struct{}{}
+		// Wait until we are unblocked
+		<-unblockChan
+		return input, nil
+	})
+
+	n.Use(node.ConcurrencyLimitMiddleware(1))
+
+	// Start the first process, which should succeed and block
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := n.Process([]byte("test"))
+		if err != nil {
+			t.Errorf("Expected no error for first process, got: %v", err)
+		}
+	}()
+
+	// Wait for the first process to actually enter the processing function
+	<-readyChan
+
+	// Try a second process concurrently. It should hit the concurrency limit
+	_, err := n.Process([]byte("test2"))
+	if !errors.Is(err, node.ErrConcurrencyLimitReached) {
+		t.Fatalf("Expected ErrConcurrencyLimitReached, got: %v", err)
+	}
+
+	// Unblock the first process and wait for it to finish
+	unblockChan <- struct{}{}
+	wg.Wait()
+
+	// Now a new process should succeed because the semaphore was released
+	// We need another goroutine or run asynchronously because the process function will block again
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := n.Process([]byte("test3"))
+		if err != nil {
+			t.Errorf("Expected no error for third process, got: %v", err)
+		}
+	}()
+
+	// Wait for the third process to enter the processing function
+	<-readyChan
+	// Unblock it
+	unblockChan <- struct{}{}
+	wg.Wait()
+}
+
+func TestConcurrencyLimitMiddleware_PanicOnInvalidConfig(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("Expected panic for invalid config, but none occurred")
+		}
+	}()
+
+	node.ConcurrencyLimitMiddleware(0)
 }
