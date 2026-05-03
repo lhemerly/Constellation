@@ -3,6 +3,7 @@ package node_test
 import (
 	"errors"
 	"github.com/lhemerly/Constellation/node"
+	"sync"
 	"testing"
 	"time"
 )
@@ -312,5 +313,65 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMiddlewares_Throttling(t *testing.T) {
+	n := node.NewBaseNode("throttle-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	maxConcurrent := 2
+	n.Use(node.ThrottlingMiddleware(maxConcurrent))
+
+	var (
+		mu           sync.Mutex
+		active       int
+		maxActive    int
+		processCount int
+	)
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		mu.Lock()
+		active++
+		if active > maxActive {
+			maxActive = active
+		}
+		mu.Unlock()
+
+		// Simulate some work so that concurrent requests overlap
+		time.Sleep(10 * time.Millisecond)
+
+		mu.Lock()
+		active--
+		processCount++
+		mu.Unlock()
+
+		return []byte("success"), nil
+	})
+
+	var wg sync.WaitGroup
+	requests := 5
+
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res, err := n.Process([]byte("input"))
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if string(res) != "success" {
+				t.Errorf("expected success, got %s", string(res))
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	if maxActive > maxConcurrent {
+		t.Errorf("expected max active processes to be <= %d, got %d", maxConcurrent, maxActive)
+	}
+	if processCount != requests {
+		t.Errorf("expected %d processes, got %d", requests, processCount)
 	}
 }

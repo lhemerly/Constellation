@@ -61,6 +61,24 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 	}
 }
 
+// ThrottlingMiddleware limits the number of concurrent processes utilizing a semaphore channel.
+func ThrottlingMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			// Acquire a spot
+			sem <- struct{}{}
+			defer func() {
+				// Release the spot
+				<-sem
+			}()
+
+			return next(input)
+		}
+	}
+}
+
 // CacheMiddleware caches the output of successful processes for a given TTL, keyed by the hash of the input.
 func CacheMiddleware(ttl time.Duration) Middleware {
 	type cacheEntry struct {
@@ -75,9 +93,8 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			sum := sha256.Sum256(input)
+			key := hex.EncodeToString(sum[:])
 
 			mu.RLock()
 			entry, exists := cache[key]
