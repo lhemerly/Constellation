@@ -314,3 +314,43 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 2 tokens per 100ms, max capacity 2
+	interval := 100 * time.Millisecond
+	n.Use(node.RateLimitMiddleware(2, interval, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Consume 1st token
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error for 1st request: %v", err)
+	}
+
+	// Consume 2nd token
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("unexpected error for 2nd request: %v", err)
+	}
+
+	// 3rd request should fail (rate limit exceeded)
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for tokens to replenish
+	time.Sleep(interval + 10*time.Millisecond)
+
+	// Should succeed now
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("unexpected error for 4th request: %v", err)
+	}
+}
