@@ -162,6 +162,74 @@ func RecoveryMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte,
 	}
 }
 
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+var ErrValidationFailed = errors.New("validation failed")
+
+// RateLimitMiddleware implements a lightweight token-bucket rate limiter.
+// rate specifies how many requests are allowed per second.
+func RateLimitMiddleware(rate int, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+			lastUpdate = now
+
+			tokens += elapsed * float64(rate)
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// FallbackMiddleware catches errors from the next middleware/process function
+// and uses a fallback function to provide a default response.
+func FallbackMiddleware(fallback func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			// Clone input in case next mutates it before failing
+			inputCopy := make([]byte, len(input))
+			copy(inputCopy, input)
+
+			output, err := next(input)
+			if err != nil {
+				return fallback(inputCopy, err)
+			}
+			return output, nil
+		}
+	}
+}
+
+// ValidatorMiddleware runs a validation function on the input.
+// If it returns false, processing is stopped and ErrValidationFailed is returned.
+func ValidatorMiddleware(validator func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !validator(input) {
+				return nil, ErrValidationFailed
+			}
+			return next(input)
+		}
+	}
+}
+
 // CircuitBreakerMiddleware prevents processing when failures exceed a threshold.
 // After a cooldown period, it allows a single request to test if the service has recovered.
 func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middleware {

@@ -1,6 +1,7 @@
 package node_test
 
 import (
+	"bytes"
 	"errors"
 	"github.com/lhemerly/Constellation/node"
 	"testing"
@@ -312,5 +313,96 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestRateLimitMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test-node")
+
+	// Allow 2 requests immediately (burst=2), fill rate 10 per sec
+	n.Use(node.RateLimitMiddleware(10, 2))
+
+	// Request 1 - should succeed
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("Expected success for req1, got: %v", err)
+	}
+
+	// Request 2 - should succeed
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("Expected success for req2, got: %v", err)
+	}
+
+	// Request 3 - should fail (bucket is empty)
+	_, err = n.Process([]byte("req3"))
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("Expected rate limit exceeded error, got: %v", err)
+	}
+
+	// Wait enough time to replenish 1 token (10 tokens/sec = 100ms per token)
+	time.Sleep(150 * time.Millisecond)
+
+	// Request 4 - should succeed
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("Expected success after sleep, got: %v", err)
+	}
+}
+
+func TestFallbackMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test-node")
+
+	expectedErr := errors.New("underlying error")
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if bytes.Equal(input, []byte("fail")) {
+			return nil, expectedErr
+		}
+		return input, nil
+	})
+
+	n.Use(node.FallbackMiddleware(func(input []byte, err error) ([]byte, error) {
+		if err == expectedErr {
+			return append([]byte("fallback-"), input...), nil
+		}
+		return nil, err
+	}))
+
+	// Test success path
+	out, err := n.Process([]byte("success"))
+	if err != nil {
+		t.Fatalf("Expected success, got error: %v", err)
+	}
+	if !bytes.Equal(out, []byte("success")) {
+		t.Errorf("Expected 'success', got '%s'", out)
+	}
+
+	// Test fallback path
+	out, err = n.Process([]byte("fail"))
+	if err != nil {
+		t.Fatalf("Expected fallback to return success, got error: %v", err)
+	}
+	expectedOut := []byte("fallback-fail")
+	if !bytes.Equal(out, expectedOut) {
+		t.Errorf("Expected '%s', got '%s'", expectedOut, out)
+	}
+}
+
+func TestValidatorMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test-node")
+
+	n.Use(node.ValidatorMiddleware(func(input []byte) bool {
+		return bytes.HasPrefix(input, []byte("valid:"))
+	}))
+
+	_, err := n.Process([]byte("valid:data"))
+	if err != nil {
+		t.Fatalf("Expected success for valid data, got error: %v", err)
+	}
+
+	_, err = n.Process([]byte("invalid:data"))
+	if err != node.ErrValidationFailed {
+		t.Fatalf("Expected validation error, got: %v", err)
 	}
 }
