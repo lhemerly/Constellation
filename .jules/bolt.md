@@ -17,3 +17,7 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+
+## 2024-06-05 - Direct Array Comparison for SHA256 Keys
+**Learning:** `sha256.Sum256(input)` generates a `[32]byte` array directly, and in Go, arrays of comparable types are themselves comparable and can be used directly as map keys. Replacing `sha256.New()`, `Write()`, `Sum(nil)` and `hex.EncodeToString` with a single `Sum256` call and using the array as the map key eliminates multiple string and slice allocations, significantly reducing GC pressure.
+**Action:** When implementing caching or hashing keys for high-throughput operations in Go, avoid hex-encoding if the key is only used internally in a map. Use `sha256.Sum256` and the resulting `[32]byte` array directly.
