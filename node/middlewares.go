@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,54 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// DeadLetterQueueMiddleware forwards the original payload to a configured Dead Letter Queue (DLQ) node
+// if the processing fails. It still returns the error to the caller.
+func DeadLetterQueueMiddleware(dlqNode Node) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil && dlqNode != nil {
+				// We intentionally ignore the DLQ node process error to prevent it from masking the original error
+				_ = dlqNode.Notify(input)
+			}
+			return output, err
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the rate of incoming requests using a token bucket algorithm.
+func RateLimiterMiddleware(rate float64, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+			lastUpdate = now
+
+			tokens += elapsed * rate
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+
+			if tokens >= 1 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
 		}
 	}
 }

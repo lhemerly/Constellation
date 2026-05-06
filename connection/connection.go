@@ -80,6 +80,8 @@ func (f *ConnectionFactory) NewConnection(ctx context.Context, connectionType, a
 		return NewGRPCConnection(ctx, address, opts...)
 	case "local", "channel":
 		return NewChannelConnection(ctx, address)
+	case "tcp":
+		return NewTCPConnection(ctx, address)
 	default:
 		return nil, fmt.Errorf("unsupported connection type: %s", connectionType)
 	}
