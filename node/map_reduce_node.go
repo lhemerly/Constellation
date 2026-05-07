@@ -37,18 +37,22 @@ func NewMapReduceNode(id string, mappers []Node, reducer Node) *MapReduceNode {
 // mapReduceProcess handles the map-reduce lifecycle.
 func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		errs    []error
-		results [][]byte
+		wg sync.WaitGroup
 	)
+
+	// Pre-allocate arrays for results and errors based on the number of mappers
+	// This eliminates the need for sync.Mutex and append(), reducing lock contention
+	// and memory reallocations, ensuring deterministic ordering.
+	numMappers := len(mr.mappers)
+	errs := make([]error, numMappers)
+	results := make([][]byte, numMappers)
 
 	// Step 1: Map
 	// The input is broadcasted to all mappers.
 	// For a more advanced implementation, the input could be split into chunks.
-	for _, mapper := range mr.mappers {
+	for i, mapper := range mr.mappers {
 		wg.Add(1)
-		go func(m Node) {
+		go func(idx int, m Node) {
 			defer wg.Done()
 
 			// Clone input to prevent data races
@@ -57,25 +61,37 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 
 			res, err := m.Process(inputCopy)
 
-			mu.Lock()
-			defer mu.Unlock()
+			// Assign results to the pre-allocated index without locks
 			if err != nil {
-				errs = append(errs, err)
+				errs[idx] = err
 			} else {
-				results = append(results, res)
+				results[idx] = res
 			}
-		}(mapper)
+		}(i, mapper)
 	}
 
 	wg.Wait()
 
-	if len(errs) > 0 {
-		return nil, errors.Join(append([]error{errors.New("map phase failed")}, errs...)...)
+	var actualErrs []error
+	for _, err := range errs {
+		if err != nil {
+			actualErrs = append(actualErrs, err)
+		}
+	}
+
+	if len(actualErrs) > 0 {
+		return nil, errors.Join(append([]error{errors.New("map phase failed")}, actualErrs...)...)
+	}
+
+	// Calculate total length for pre-allocation of reducedInput
+	totalLen := 0
+	for _, res := range results {
+		totalLen += len(res)
 	}
 
 	// Flatten results into a single byte slice for the reducer
-	// Format: simple concatenation for this basic implementation.
-	var reducedInput []byte
+	// Pre-allocated capacity to totalLen to prevent repeated memory reallocations during append.
+	reducedInput := make([]byte, 0, totalLen)
 	for _, res := range results {
 		reducedInput = append(reducedInput, res...)
 	}
