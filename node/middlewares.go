@@ -213,3 +213,48 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 		}
 	}
 }
+
+// RateLimiterMiddleware limits the number of requests per second using a simple token bucket.
+func RateLimiterMiddleware(rate int, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+			lastUpdate = now
+
+			tokens += elapsed * float64(rate)
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+
+			if tokens < 1 {
+				mu.Unlock()
+				return nil, errors.New("rate limit exceeded")
+			}
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// FallbackMiddleware calls the fallback function if the primary processing fails.
+func FallbackMiddleware(fallbackFunc func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallbackFunc(input, err)
+			}
+			return output, nil
+		}
+	}
+}
