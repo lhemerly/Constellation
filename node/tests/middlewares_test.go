@@ -314,3 +314,71 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestRateLimiterMiddleware(t *testing.T) {
+	middleware := node.RateLimiterMiddleware(2, 2)
+	baseFunc := func(input []byte) ([]byte, error) {
+		return input, nil
+	}
+	wrappedFunc := middleware(baseFunc)
+
+	// Burst of 2 should pass
+	_, err := wrappedFunc([]byte("test"))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	_, err = wrappedFunc([]byte("test"))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	// Third one should fail immediately
+	_, err = wrappedFunc([]byte("test"))
+	if err == nil || err.Error() != "rate limit exceeded" {
+		t.Fatalf("expected rate limit exceeded error, got: %v", err)
+	}
+
+	// Wait 1 second to replenish tokens
+	time.Sleep(1 * time.Second)
+
+	_, err = wrappedFunc([]byte("test"))
+	if err != nil {
+		t.Fatalf("expected no error after waiting, got: %v", err)
+	}
+}
+
+func TestFallbackMiddleware(t *testing.T) {
+	fallbackFunc := func(input []byte, err error) ([]byte, error) {
+		return []byte("fallback"), nil
+	}
+	middleware := node.FallbackMiddleware(fallbackFunc)
+
+	// Test success case
+	baseFuncSuccess := func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	}
+	wrappedFuncSuccess := middleware(baseFuncSuccess)
+
+	output, err := wrappedFuncSuccess([]byte("test"))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if string(output) != "success" {
+		t.Errorf("expected success, got: %s", string(output))
+	}
+
+	// Test fallback case
+	baseFuncFail := func(input []byte) ([]byte, error) {
+		return nil, errors.New("processing error")
+	}
+	wrappedFuncFail := middleware(baseFuncFail)
+
+	output, err = wrappedFuncFail([]byte("test"))
+	if err != nil {
+		t.Fatalf("expected no error due to fallback, got: %v", err)
+	}
+	if string(output) != "fallback" {
+		t.Errorf("expected fallback, got: %s", string(output))
+	}
+}
