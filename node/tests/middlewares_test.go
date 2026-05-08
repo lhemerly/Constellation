@@ -241,6 +241,104 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	refillRate := 50 * time.Millisecond
+	n.Use(node.RateLimitMiddleware(2, refillRate))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("ok"), nil
+	})
+
+	// 1. Consume tokens
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error on req1, got %v", err)
+	}
+
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error on req2, got %v", err)
+	}
+
+	// 2. Exceed rate limit
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded on req3, got %v", err)
+	}
+
+	// 3. Wait for refill
+	time.Sleep(refillRate + 10*time.Millisecond)
+
+	// 4. Try again
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error on req4 after refill, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("ok"), nil
+	})
+
+	// Successes
+	n.Process([]byte("1"))
+	n.Process([]byte("2"))
+
+	if metrics.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 0 {
+		t.Errorf("expected 0 failures, got %d", metrics.Failures)
+	}
+
+	// Failures
+	fail = true
+	n.Process([]byte("3"))
+	n.Process([]byte("4"))
+	n.Process([]byte("5"))
+
+	if metrics.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 3 {
+		t.Errorf("expected 3 failures, got %d", metrics.Failures)
+	}
+}
+
+func BenchmarkCacheMiddleware(b *testing.B) {
+	n := node.NewBaseNode("benchmark-cache-node")
+	defer func() {
+		_ = n.Delete()
+	}()
+
+	n.Use(node.CacheMiddleware(1 * time.Minute))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return append([]byte("processed: "), input...), nil
+	})
+
+	input := []byte("benchmark data")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = n.Process(input)
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
