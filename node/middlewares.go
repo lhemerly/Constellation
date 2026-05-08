@@ -2,16 +2,17 @@ package node
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -70,14 +71,12 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 
 	var (
 		mu    sync.RWMutex
-		cache = make(map[string]cacheEntry)
+		cache = make(map[[32]byte]cacheEntry)
 	)
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			key := sha256.Sum256(input)
 
 			mu.RLock()
 			entry, exists := cache[key]
@@ -159,6 +158,64 @@ func RecoveryMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte,
 		}()
 
 		return next(input)
+	}
+}
+
+// RateLimitMiddleware limits the number of requests per time window.
+// It implements a token bucket algorithm.
+func RateLimitMiddleware(tokens int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		available  int       = tokens
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			refillTokens := int(elapsed / refillRate)
+
+			if refillTokens > 0 {
+				available += refillTokens
+				if available > tokens {
+					available = tokens
+				}
+				lastRefill = now
+			}
+
+			if available <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			available--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// Metrics gatherer to store executions metadata
+type Metrics struct {
+	Successes uint64
+	Failures  uint64
+}
+
+// MetricsMiddleware tracks the number of successful and failed process calls using atomic counters.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				atomic.AddUint64(&metrics.Failures, 1)
+			} else {
+				atomic.AddUint64(&metrics.Successes, 1)
+			}
+			return output, err
+		}
 	}
 }
 
