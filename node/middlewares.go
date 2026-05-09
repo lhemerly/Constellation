@@ -213,3 +213,86 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 		}
 	}
 }
+
+var (
+	ErrRateLimitExceeded = errors.New("rate limit exceeded")
+)
+
+// RateLimiterMiddleware limits the number of requests processed per second.
+// If the limit is exceeded, it returns ErrRateLimitExceeded immediately.
+func RateLimiterMiddleware(requestsPerSecond int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = requestsPerSecond
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Refill tokens based on elapsed time
+			if elapsed >= time.Second {
+				tokens = requestsPerSecond
+				lastRefill = now
+			} else {
+				// Pro-rata refill can be done but for simplicity,
+				// full refill per second window is implemented.
+				// For a strict token bucket, we could add math:
+				// tokensToAdd := int(elapsed.Seconds() * float64(requestsPerSecond))
+				// But let's just do a simple sliding window per second.
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// NodeMetrics holds the collected metrics for a node.
+type NodeMetrics struct {
+	TotalRequests int64
+	Successes     int64
+	Errors        int64
+	TotalLatency  time.Duration
+}
+
+// MetricsMiddleware tracks the number of successful processes, errors, and total processing latency.
+// It uses a sync.Mutex to safely update the provided NodeMetrics struct.
+func MetricsMiddleware(metrics *NodeMetrics) Middleware {
+	var mu sync.Mutex
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			start := time.Now()
+
+			mu.Lock()
+			metrics.TotalRequests++
+			mu.Unlock()
+
+			output, err := next(input)
+
+			duration := time.Since(start)
+
+			mu.Lock()
+			metrics.TotalLatency += duration
+			if err != nil {
+				metrics.Errors++
+			} else {
+				metrics.Successes++
+			}
+			mu.Unlock()
+
+			return output, err
+		}
+	}
+}

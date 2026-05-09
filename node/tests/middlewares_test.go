@@ -314,3 +314,85 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestRateLimiterMiddleware_Success(t *testing.T) {
+	n := node.NewBaseNode("test-rate-limiter")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	// 2 requests per second allowed
+	n.Use(node.RateLimiterMiddleware(2))
+
+	if err := n.Create(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// First two should succeed
+	_, err := n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("unexpected error on 1st process: %v", err)
+	}
+
+	_, err = n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("unexpected error on 2nd process: %v", err)
+	}
+
+	// Third should fail immediately
+	_, err = n.Process([]byte("test"))
+	if err == nil {
+		t.Fatal("expected ErrRateLimitExceeded, got nil")
+	}
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Errorf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait 1 second for tokens to refill
+	time.Sleep(1100 * time.Millisecond)
+
+	// Fourth should succeed
+	_, err = n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("unexpected error on 4th process after wait: %v", err)
+	}
+}
+
+func TestMetricsMiddleware_Success(t *testing.T) {
+	n := node.NewBaseNode("test-metrics")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("expected error")
+		}
+		time.Sleep(10 * time.Millisecond)
+		return input, nil
+	})
+
+	metrics := &node.NodeMetrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	if err := n.Create(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	n.Process([]byte("success 1"))
+	n.Process([]byte("success 2"))
+	n.Process([]byte("fail"))
+
+	if metrics.TotalRequests != 3 {
+		t.Errorf("expected 3 total requests, got %d", metrics.TotalRequests)
+	}
+	if metrics.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", metrics.Successes)
+	}
+	if metrics.Errors != 1 {
+		t.Errorf("expected 1 error, got %d", metrics.Errors)
+	}
+	if metrics.TotalLatency < 20*time.Millisecond {
+		t.Errorf("expected total latency >= 20ms, got %v", metrics.TotalLatency)
+	}
+}
