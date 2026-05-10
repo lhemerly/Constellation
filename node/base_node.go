@@ -47,7 +47,10 @@ func (n *BaseNode) Delete() error {
 // Process processes the input and returns the output.
 func (n *BaseNode) Process(input []byte) ([]byte, error) {
 	atomic.AddUint64(&n.eventCounter, 1)
-	return n.processFunc(input)
+	n.mutex.RLock()
+	fn := n.processFunc
+	n.mutex.RUnlock()
+	return fn(input)
 }
 
 // SetProcessFunc allows setting a custom process function.
