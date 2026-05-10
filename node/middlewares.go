@@ -12,6 +12,9 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrTooManyRequests    = errors.New("too many concurrent requests")
+	ErrValidationFailed   = errors.New("validation failed")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -210,6 +213,80 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			}
 
 			return output, err
+		}
+	}
+}
+
+// RateLimitMiddleware restricts the processing rate using a simple token bucket algorithm.
+func RateLimitMiddleware(rate int, interval time.Duration) Middleware {
+	var (
+		mu      sync.Mutex
+		tokens  int
+		lastRef time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			// Refill tokens based on elapsed intervals
+			if lastRef.IsZero() {
+				tokens = rate
+				lastRef = now
+			} else {
+				elapsed := now.Sub(lastRef)
+				if elapsed >= interval {
+					intervalsPassed := int(elapsed / interval)
+					tokens += intervalsPassed * rate
+					if tokens > rate {
+						tokens = rate
+					}
+					// Advance lastRef by exact intervals to prevent drift
+					lastRef = lastRef.Add(time.Duration(intervalsPassed) * interval)
+				}
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// ConcurrencyLimitMiddleware limits the number of concurrent executions using a semaphore channel.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case sem <- struct{}{}:
+				// Acquired semaphore
+				defer func() { <-sem }()
+				return next(input)
+			default:
+				// Semaphore full
+				return nil, ErrTooManyRequests
+			}
+		}
+	}
+}
+
+// ValidatorMiddleware drops invalid payloads early by running a custom validation function.
+func ValidatorMiddleware(validator func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !validator(input) {
+				return nil, ErrValidationFailed
+			}
+			return next(input)
 		}
 	}
 }
