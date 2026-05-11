@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -12,6 +13,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrChaosInjected      = errors.New("chaos injected error")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -159,6 +162,75 @@ func RecoveryMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte,
 		}()
 
 		return next(input)
+	}
+}
+
+// RateLimiterMiddleware implements a simple token bucket algorithm to rate-limit incoming requests.
+// It allows a maximum number of requests (capacity) with tokens refilling at a given rate.
+func RateLimiterMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = float64(capacity)
+		lastUpdate = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate)
+			lastUpdate = now
+
+			// Calculate tokens to add based on elapsed time
+			tokensToAdd := float64(elapsed) / float64(refillRate)
+			tokens += tokensToAdd
+			if tokens > float64(capacity) {
+				tokens = float64(capacity)
+			}
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// ChaosMiddleware randomly injects errors or latency into the processing chain
+// to aid in resilience testing.
+func ChaosMiddleware(errorProbability float64, latencyProbability float64, maxLatency time.Duration) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if rand.Float64() < errorProbability {
+				return nil, ErrChaosInjected
+			}
+
+			if rand.Float64() < latencyProbability && maxLatency > 0 {
+				latency := time.Duration(rand.Int63n(int64(maxLatency)))
+				time.Sleep(latency)
+			}
+
+			return next(input)
+		}
+	}
+}
+
+// FallbackMiddleware invokes a fallback function when the primary processing logic fails,
+// allowing graceful recovery or default responses.
+func FallbackMiddleware(fallback func(input []byte, err error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallback(input, err)
+			}
+			return output, nil
+		}
 	}
 }
 
