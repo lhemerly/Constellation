@@ -2,7 +2,6 @@ package node
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"sync"
@@ -62,6 +61,7 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 }
 
 // CacheMiddleware caches the output of successful processes for a given TTL, keyed by the hash of the input.
+// Optimization: uses sha256.Sum256 and the raw [32]byte array as the map key to avoid memory allocations and improve speed.
 func CacheMiddleware(ttl time.Duration) Middleware {
 	type cacheEntry struct {
 		output    []byte
@@ -70,14 +70,12 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 
 	var (
 		mu    sync.RWMutex
-		cache = make(map[string]cacheEntry)
+		cache = make(map[[32]byte]cacheEntry)
 	)
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			key := sha256.Sum256(input)
 
 			mu.RLock()
 			entry, exists := cache[key]
