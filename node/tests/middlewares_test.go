@@ -314,3 +314,82 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 2 tokens, refills 1 token every 100ms
+	n.Use(node.RateLimiterMiddleware(2, 100*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two should succeed immediately
+	res, err := n.Process([]byte("input1"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success on first call, got err: %v, res: %s", err, res)
+	}
+
+	res, err = n.Process([]byte("input2"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success on second call, got err: %v, res: %s", err, res)
+	}
+
+	// Third call should fail immediately
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for refill and try again
+	time.Sleep(110 * time.Millisecond)
+	res, err = n.Process([]byte("input4"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success after refill, got err: %v, res: %s", err, res)
+	}
+}
+
+func TestMiddlewares_Chaos(t *testing.T) {
+	n := node.NewBaseNode("chaos-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// High probability for error to ensure it hits
+	n.Use(node.ChaosMiddleware(1.0, 0.0, 0))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrChaosInjected) {
+		t.Fatalf("expected ErrChaosInjected, got %v", err)
+	}
+}
+
+func TestMiddlewares_Fallback(t *testing.T) {
+	n := node.NewBaseNode("fallback-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	fallbackTriggered := false
+	n.Use(node.FallbackMiddleware(func(input []byte, err error) ([]byte, error) {
+		fallbackTriggered = true
+		return []byte("fallback-response"), nil
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, errors.New("primary failed")
+	})
+
+	res, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected no error from fallback, got %v", err)
+	}
+	if string(res) != "fallback-response" {
+		t.Fatalf("expected fallback-response, got %s", res)
+	}
+	if !fallbackTriggered {
+		t.Fatalf("expected fallback function to be triggered")
+	}
+}
