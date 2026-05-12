@@ -213,3 +213,36 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 		}
 	}
 }
+
+// ErrRateLimitExceeded is returned when the rate limit for a node is exceeded.
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimitMiddleware limits the rate of processing requests based on a token bucket algorithm.
+// rate is the number of tokens added per second.
+// capacity is the maximum number of tokens the bucket can hold.
+func RateLimitMiddleware(rate float64, capacity int) Middleware {
+	var mu sync.Mutex
+	tokens := float64(capacity)
+	lastRefill := time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+			tokens += elapsed * rate
+			if tokens > float64(capacity) {
+				tokens = float64(capacity)
+			}
+			lastRefill = now
+
+			if tokens >= 1 {
+				tokens -= 1
+				mu.Unlock()
+				return next(input)
+			}
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
