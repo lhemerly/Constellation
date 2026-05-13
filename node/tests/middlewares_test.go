@@ -270,6 +270,74 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 10 requests per second (1 per 100ms)
+	n.Use(node.RateLimitMiddleware(10))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First 10 requests should succeed (burst allowed by initial tokens)
+	for i := 0; i < 10; i++ {
+		_, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("unexpected error on request %d: %v", i, err)
+		}
+	}
+
+	// 11th request should fail immediately
+	_, err := n.Process([]byte("input"))
+	if err == nil || err.Error() != "rate limit exceeded" {
+		t.Fatalf("expected 'rate limit exceeded' error, got %v", err)
+	}
+
+	// Wait to accumulate more tokens
+	time.Sleep(150 * time.Millisecond)
+
+	// Should succeed again
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error after waiting: %v", err)
+	}
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	validatorFunc := func(input []byte) error {
+		if string(input) == "invalid" {
+			return errors.New("validation failed")
+		}
+		return nil
+	}
+
+	n.Use(node.ValidatorMiddleware(validatorFunc))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Valid input
+	res, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("unexpected error for valid input: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected 'success', got '%s'", string(res))
+	}
+
+	// Invalid input
+	_, err = n.Process([]byte("invalid"))
+	if err == nil || err.Error() != "validation failed" {
+		t.Fatalf("expected 'validation failed' error, got %v", err)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})

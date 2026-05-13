@@ -162,6 +162,52 @@ func RecoveryMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte,
 	}
 }
 
+// RateLimitMiddleware restricts the number of requests processed per second using a simple token bucket.
+func RateLimitMiddleware(requestsPerSecond float64) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = requestsPerSecond
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+
+			tokens += elapsed * requestsPerSecond
+			if tokens > requestsPerSecond {
+				tokens = requestsPerSecond
+			}
+			lastUpdate = now
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, errors.New("rate limit exceeded")
+			}
+
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// ValidatorMiddleware runs a validation function on the input before processing.
+// If the validation fails, it returns the validation error without calling the next function.
+func ValidatorMiddleware(validator func([]byte) error) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if err := validator(input); err != nil {
+				return nil, err
+			}
+			return next(input)
+		}
+	}
+}
+
 // CircuitBreakerMiddleware prevents processing when failures exceed a threshold.
 // After a cooldown period, it allows a single request to test if the service has recovered.
 func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middleware {
