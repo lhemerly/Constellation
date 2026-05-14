@@ -99,3 +99,34 @@ func TestBaseNodeMiddleware(t *testing.T) {
 		t.Errorf("Process() output = %v, want %v", string(output), string(expected2))
 	}
 }
+
+func TestRateLimitMiddleware(t *testing.T) {
+	n := node.NewBaseNode("node-ratelimit-test")
+	if err := n.Create(); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	defer n.Delete()
+
+	// 10 requests per second, burst of 2
+	n.Use(node.RateLimitMiddleware(10, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	input := []byte("data")
+
+	// The burst is 2, so the first 2 requests should succeed.
+	for i := 0; i < 2; i++ {
+		_, err := n.Process(input)
+		if err != nil {
+			t.Fatalf("Request %d: expected success, got %v", i+1, err)
+		}
+	}
+
+	// The 3rd request should fail with ErrRateLimitExceeded since we haven't waited for tokens to refill.
+	_, err := n.Process(input)
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("Request 3: expected ErrRateLimitExceeded, got %v", err)
+	}
+}

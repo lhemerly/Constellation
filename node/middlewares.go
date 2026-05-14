@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,45 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests per second.
+// It uses a simple token bucket algorithm.
+func RateLimitMiddleware(requestsPerSecond int, burst int) Middleware {
+	// If requestsPerSecond is very high, tokensToAdd will be huge but bounded by burst.
+	// For better precision with small intervals, we could use floating point tokens or
+	// keep track of the remainder.
+	tokens := float64(burst)
+	var mu sync.Mutex
+	lastUpdate := time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate)
+
+			// Refill tokens
+			tokensToAdd := elapsed.Seconds() * float64(requestsPerSecond)
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > float64(burst) {
+					tokens = float64(burst)
+				}
+				lastUpdate = now
+			}
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
 		}
 	}
 }
