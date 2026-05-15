@@ -37,18 +37,19 @@ func NewMapReduceNode(id string, mappers []Node, reducer Node) *MapReduceNode {
 // mapReduceProcess handles the map-reduce lifecycle.
 func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 	var (
-		wg      sync.WaitGroup
-		mu      sync.Mutex
-		errs    []error
-		results [][]byte
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
 	)
+
+	results := make([][]byte, len(mr.mappers))
 
 	// Step 1: Map
 	// The input is broadcasted to all mappers.
 	// For a more advanced implementation, the input could be split into chunks.
-	for _, mapper := range mr.mappers {
+	for i, mapper := range mr.mappers {
 		wg.Add(1)
-		go func(m Node) {
+		go func(idx int, m Node) {
 			defer wg.Done()
 
 			// Clone input to prevent data races
@@ -57,14 +58,14 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 
 			res, err := m.Process(inputCopy)
 
-			mu.Lock()
-			defer mu.Unlock()
 			if err != nil {
+				mu.Lock()
 				errs = append(errs, err)
+				mu.Unlock()
 			} else {
-				results = append(results, res)
+				results[idx] = res
 			}
-		}(mapper)
+		}(i, mapper)
 	}
 
 	wg.Wait()
@@ -75,7 +76,12 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 
 	// Flatten results into a single byte slice for the reducer
 	// Format: simple concatenation for this basic implementation.
-	var reducedInput []byte
+	var totalLen int
+	for _, res := range results {
+		totalLen += len(res)
+	}
+	reducedInput := make([]byte, 0, totalLen)
+
 	for _, res := range results {
 		reducedInput = append(reducedInput, res...)
 	}
