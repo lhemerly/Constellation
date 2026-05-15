@@ -1,9 +1,12 @@
 package node
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -12,6 +15,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +61,81 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// CompressMiddleware compresses the output using gzip.
+func CompressMiddleware() Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil || output == nil {
+				return output, err
+			}
+
+			var b bytes.Buffer
+			w := gzip.NewWriter(&b)
+			if _, err := w.Write(output); err != nil {
+				return nil, errors.Join(errors.New("failed to compress output"), err)
+			}
+			if err := w.Close(); err != nil {
+				return nil, errors.Join(errors.New("failed to close compressor"), err)
+			}
+
+			return b.Bytes(), nil
+		}
+	}
+}
+
+// DecompressMiddleware decompresses the input using gzip before processing.
+func DecompressMiddleware() Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			r, err := gzip.NewReader(bytes.NewReader(input))
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to create decompressor"), err)
+			}
+			defer r.Close()
+
+			decompressed, err := io.ReadAll(r)
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to decompress input"), err)
+			}
+
+			return next(decompressed)
+		}
+	}
+}
+
+// RateLimitMiddleware restricts the number of requests processed within a given time window.
+func RateLimitMiddleware(rate int, window time.Duration) Middleware {
+	var (
+		mu          sync.Mutex
+		requests    int
+		windowStart time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			if now.Sub(windowStart) >= window {
+				// Reset window
+				windowStart = now
+				requests = 0
+			}
+
+			if requests >= rate {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			requests++
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }
