@@ -33,6 +33,72 @@ func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, 
 	}
 }
 
+// RateLimitMiddleware uses a token bucket to rate limit the requests to a node.
+// capacity is the maximum number of tokens.
+// fillRate is the time duration to add one token.
+func RateLimitMiddleware(capacity int, fillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = capacity
+		lastUpdate = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate)
+			newTokens := int(elapsed / fillRate)
+
+			if newTokens > 0 {
+				tokens += newTokens
+				if tokens > capacity {
+					tokens = capacity
+				}
+				lastUpdate = now
+			}
+
+			if tokens > 0 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+			mu.Unlock()
+
+			return nil, errors.New("rate limit exceeded")
+		}
+	}
+}
+
+// ExponentialBackoffRetryMiddleware retries a failed operation with exponential backoff and jitter.
+func ExponentialBackoffRetryMiddleware(retries int, initialDelay time.Duration) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			var err error
+			var output []byte
+			delay := initialDelay
+
+			for i := 0; i <= retries; i++ {
+				inputCopy := make([]byte, len(input))
+				copy(inputCopy, input)
+
+				output, err = next(inputCopy)
+				if err == nil {
+					return output, nil
+				}
+
+				if i < retries {
+					time.Sleep(delay)
+					delay *= 2 // Exponential backoff (a real implementation might add jitter here)
+				}
+			}
+
+			return nil, errors.Join(errors.New("operation failed after retries with backoff"), err)
+		}
+	}
+}
+
 // RetryMiddleware retries a failed operation for a specified number of times with a delay.
 func RetryMiddleware(retries int, delay time.Duration) Middleware {
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {

@@ -2,10 +2,109 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	// First two requests should succeed (burst capacity)
+	_, err := n.Process([]byte("1"))
+	if err != nil {
+		t.Fatalf("expected request 1 to succeed, got %v", err)
+	}
+
+	_, err = n.Process([]byte("2"))
+	if err != nil {
+		t.Fatalf("expected request 2 to succeed, got %v", err)
+	}
+
+	// Third request should fail immediately
+	_, err = n.Process([]byte("3"))
+	if err == nil {
+		t.Fatalf("expected request 3 to fail due to rate limit, got nil")
+	}
+	if !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Errorf("expected rate limit error, got %v", err)
+	}
+
+	// Wait for bucket to refill by 1 token
+	time.Sleep(60 * time.Millisecond)
+
+	// Fourth request should succeed
+	_, err = n.Process([]byte("4"))
+	if err != nil {
+		t.Fatalf("expected request 4 to succeed, got %v", err)
+	}
+}
+
+func TestMiddlewares_ExponentialBackoffRetry_Success(t *testing.T) {
+	n := node.NewBaseNode("exp-retry-node")
+	attempts := 0
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, errors.New("temporary error")
+		}
+		return []byte("success"), nil
+	})
+
+	n.Use(node.ExponentialBackoffRetryMiddleware(3, 10*time.Millisecond))
+
+	start := time.Now()
+	res, err := n.Process([]byte("test"))
+	duration := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// Delays: 10ms + 20ms = 30ms (approx)
+	if duration < 30*time.Millisecond {
+		t.Errorf("expected duration >= 30ms, got %v", duration)
+	}
+}
+
+func TestMiddlewares_ExponentialBackoffRetry_Failure(t *testing.T) {
+	n := node.NewBaseNode("exp-retry-fail-node")
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, errors.New("permanent error")
+	})
+
+	n.Use(node.ExponentialBackoffRetryMiddleware(2, 5*time.Millisecond))
+
+	start := time.Now()
+	_, err := n.Process([]byte("test"))
+	duration := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "operation failed after retries with backoff") {
+		t.Errorf("expected backoff error message, got %v", err)
+	}
+
+	// Delays: 5ms + 10ms = 15ms
+	if duration < 15*time.Millisecond {
+		t.Errorf("expected duration >= 15ms, got %v", duration)
+	}
+}
 
 func TestMiddlewares_Logging(t *testing.T) {
 	n := node.NewBaseNode("log-node")
