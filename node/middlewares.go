@@ -1,6 +1,8 @@
 package node
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,6 +14,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +60,60 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests per given time window.
+// If the limit is exceeded, it returns ErrRateLimitExceeded.
+func RateLimitMiddleware(limit int, window time.Duration) Middleware {
+	var (
+		mu    sync.Mutex
+		count int
+		start time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			if start.IsZero() || now.Sub(start) >= window {
+				start = now
+				count = 0
+			}
+
+			if count >= limit {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+			count++
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// GzipMiddleware compresses the outgoing output using gzip.
+// It skips compression if the output is empty or there's an error.
+func GzipMiddleware() Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil || len(output) == 0 {
+				return output, err
+			}
+
+			var buf bytes.Buffer
+			gw := gzip.NewWriter(&buf)
+			if _, err := gw.Write(output); err != nil {
+				return nil, err
+			}
+			if err := gw.Close(); err != nil {
+				return nil, err
+			}
+			return buf.Bytes(), nil
 		}
 	}
 }
