@@ -29,6 +29,16 @@ func (d *EventDispatcher) RegisterListener(eventType string, listener func(Event
 	d.listeners[eventType] = append(d.listeners[eventType], listener)
 }
 
+// RegisterFilteredListener registers a listener that is only invoked if the provided
+// filter function returns true for the dispatched event.
+func (d *EventDispatcher) RegisterFilteredListener(eventType string, filter func(Event) bool, listener func(Event)) {
+	d.RegisterListener(eventType, func(e Event) {
+		if filter(e) {
+			listener(e)
+		}
+	})
+}
+
 // Dispatch sends event to every listener registered for event.GetType().
 // Each listener is called in a separate goroutine so that slow listeners
 // cannot block each other. Dispatch waits for all listener goroutines to

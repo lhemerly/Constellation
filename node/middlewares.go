@@ -1,9 +1,12 @@
 package node
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -12,6 +15,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +61,78 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// CompressionMiddleware decompresses input and compresses output using gzip.
+// It assumes all input should be decompressed, and all output should be compressed.
+func CompressionMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+	return func(input []byte) ([]byte, error) {
+		// Decompress input if it's not empty
+		var decompressedInput []byte
+		if len(input) > 0 {
+			reader, err := gzip.NewReader(bytes.NewReader(input))
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to create gzip reader for input"), err)
+			}
+			decompressedInput, err = io.ReadAll(reader)
+			reader.Close()
+			if err != nil {
+				return nil, errors.Join(errors.New("failed to decompress input"), err)
+			}
+		}
+
+		// Process decompressed input
+		output, err := next(decompressedInput)
+		if err != nil {
+			return nil, err // Return error directly, don't try to compress
+		}
+
+		// Compress output
+		var compressedOutput bytes.Buffer
+		writer := gzip.NewWriter(&compressedOutput)
+		if _, writeErr := writer.Write(output); writeErr != nil {
+			return nil, errors.Join(errors.New("failed to write compressed output"), writeErr)
+		}
+		if closeErr := writer.Close(); closeErr != nil {
+			return nil, errors.Join(errors.New("failed to close gzip writer"), closeErr)
+		}
+
+		return compressedOutput.Bytes(), nil
+	}
+}
+
+// RateLimitMiddleware restricts the number of processes allowed within a specified time interval.
+// If the limit is exceeded, it returns an ErrRateLimitExceeded.
+func RateLimitMiddleware(requests int, interval time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = requests
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			if elapsed >= interval {
+				tokens = requests
+				lastRefill = now
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }

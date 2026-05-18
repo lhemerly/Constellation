@@ -133,6 +133,35 @@ func TestEventDispatcher_ConcurrentDispatch(t *testing.T) {
 	}
 }
 
+// TestEventDispatcher_FilteredListener verifies that filtered listeners
+// are only called when the filter function returns true.
+func TestEventDispatcher_FilteredListener(t *testing.T) {
+	d := event.NewEventDispatcher()
+
+	var called atomic.Int64
+
+	// Filter accepts events where data string is "allow"
+	filter := func(e event.Event) bool {
+		return string(e.GetData()) == "allow"
+	}
+
+	d.RegisterFilteredListener("filter_test", filter, func(e event.Event) {
+		called.Add(1)
+	})
+
+	// Should be filtered out
+	d.Dispatch(event.NewBaseEvent("filter_test", []byte("deny")))
+	if called.Load() != 0 {
+		t.Errorf("listener called %d times, want 0", called.Load())
+	}
+
+	// Should be accepted
+	d.Dispatch(event.NewBaseEvent("filter_test", []byte("allow")))
+	if called.Load() != 1 {
+		t.Errorf("listener called %d times, want 1", called.Load())
+	}
+}
+
 // TestEventDispatcher_ConcurrentRegisterAndDispatch verifies that listeners
 // can be registered concurrently while events are being dispatched.
 func TestEventDispatcher_ConcurrentRegisterAndDispatch(t *testing.T) {

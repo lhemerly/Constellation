@@ -1,8 +1,11 @@
 package node_test
 
 import (
+	"bytes"
+	"compress/gzip"
 	"errors"
 	"github.com/lhemerly/Constellation/node"
+	"io"
 	"testing"
 	"time"
 )
@@ -267,6 +270,96 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	_, err = n.Process([]byte("input"))
 	if !errors.Is(err, node.ErrProcessTimeout) {
 		t.Fatalf("expected ErrProcessTimeout, got %v", err)
+	}
+}
+
+func TestMiddlewares_Compression(t *testing.T) {
+	n := node.NewBaseNode("compression-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.CompressionMiddleware)
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		// Inside the node, it should see decompressed data
+		if string(input) != "decompressed input data" {
+			t.Errorf("expected 'decompressed input data', got %s", string(input))
+		}
+		// Return some uncompressed output
+		return []byte("uncompressed output data"), nil
+	})
+
+	// Manually compress the input
+	var compressedInput bytes.Buffer
+	writer := gzip.NewWriter(&compressedInput)
+	_, _ = writer.Write([]byte("decompressed input data"))
+	writer.Close()
+
+	// Process the compressed input
+	res, err := n.Process(compressedInput.Bytes())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Decompress the output to verify
+	reader, err := gzip.NewReader(bytes.NewReader(res))
+	if err != nil {
+		t.Fatalf("failed to create reader for output: %v", err)
+	}
+	decompressedOutput, err := io.ReadAll(reader)
+	reader.Close()
+	if err != nil {
+		t.Fatalf("failed to decompress output: %v", err)
+	}
+
+	if string(decompressedOutput) != "uncompressed output data" {
+		t.Errorf("expected 'uncompressed output data', got %s", string(decompressedOutput))
+	}
+}
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	interval := 100 * time.Millisecond
+	n.Use(node.RateLimitMiddleware(2, interval))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. First 2 requests should succeed
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	res, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. 3rd request should fail due to rate limit
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for interval to pass
+	time.Sleep(interval + 10*time.Millisecond)
+
+	// 4. Rate limit should reset, requests should succeed again
+	res, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error after wait, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success after wait, got %s", string(res))
 	}
 }
 
