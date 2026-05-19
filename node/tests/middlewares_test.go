@@ -241,6 +241,50 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Rate of 10 requests per second, maximum burst of 2 requests
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two requests should succeed due to the burst size of 2
+	res, err := n.Process([]byte("test1"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("Expected first request to succeed, got %v, %v", res, err)
+	}
+
+	res, err = n.Process([]byte("test2"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("Expected second request to succeed, got %v, %v", res, err)
+	}
+
+	// Third request should fail immediately as burst is consumed
+	res, err = n.Process([]byte("test3"))
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("Expected third request to fail with ErrRateLimitExceeded, got error: %v, result: %v", err, res)
+	}
+
+	// Wait for enough tokens to replenish for one request (0.1s needed for 1 token at 10 tokens/sec)
+	time.Sleep(150 * time.Millisecond)
+
+	// After sleeping, one request should succeed
+	res, err = n.Process([]byte("test4"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("Expected fourth request to succeed after delay, got %v, %v", res, err)
+	}
+
+	// Next request should fail again
+	res, err = n.Process([]byte("test5"))
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("Expected fifth request to fail with ErrRateLimitExceeded, got error: %v, result: %v", err, res)
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
