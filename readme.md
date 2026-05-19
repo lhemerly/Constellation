@@ -198,8 +198,8 @@ The project is designed to be easily extensible:
 
 ## Contributing
 
-Contributions to the Constellation project are welcome! Please refer to the `CONTRIBUTING.md` file for guidelines on how to contribute.
+Contributions to the Constellation project are welcome! Please refer to the `CONTRIBUTE.md` file for guidelines on how to contribute.
 
 ## License
 
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+This project is licensed under the MIT License. See the `LICENSE.md` file for details.
