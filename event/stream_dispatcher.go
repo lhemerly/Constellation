@@ -50,6 +50,17 @@ func (d *StreamEventDispatcher) RegisterStreamListener(eventType string, listene
 	}
 }
 
+// RegisterFilteredStreamListener registers a listener for streaming events of the
+// given type that will only be invoked if the filter function returns true.
+func (d *StreamEventDispatcher) RegisterFilteredStreamListener(eventType string, filter func(StreamEvent) bool, listener func(StreamEvent)) {
+	filteredListener := func(event StreamEvent) {
+		if filter(event) {
+			listener(event)
+		}
+	}
+	d.RegisterStreamListener(eventType, filteredListener)
+}
+
 // DispatchStream sends a StreamEvent to all registered stream listeners for
 // its event type. The send is non-blocking: if the internal buffer is full
 // the event is dropped rather than blocking the caller.

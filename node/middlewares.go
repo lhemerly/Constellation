@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,55 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the rate of requests using a simple token bucket algorithm.
+// rate is the number of tokens added per second, and burst is the maximum tokens the bucket can hold.
+func RateLimitMiddleware(rate float64, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+
+			// Refill tokens
+			tokens += elapsed * rate
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastRefill = now
+
+			// Check if we have a token
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// ValidatorMiddleware runs a validation function on the input before processing.
+// If the validation fails, it short-circuits and returns the error.
+func ValidatorMiddleware(validator func([]byte) error) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if err := validator(input); err != nil {
+				return nil, err
+			}
+			return next(input)
 		}
 	}
 }
