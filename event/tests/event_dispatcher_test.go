@@ -133,6 +133,26 @@ func TestEventDispatcher_ConcurrentDispatch(t *testing.T) {
 	}
 }
 
+func TestEventDispatcher_FilteredListener(t *testing.T) {
+	d := event.NewEventDispatcher()
+
+	var receivedCount atomic.Int64
+	d.RegisterFilteredListener("filter_test", func(e event.Event) bool {
+		// Only allow events where data is "allowed"
+		return string(e.GetData()) == "allowed"
+	}, func(e event.Event) {
+		receivedCount.Add(1)
+	})
+
+	d.Dispatch(event.NewBaseEvent("filter_test", []byte("blocked")))
+	d.Dispatch(event.NewBaseEvent("filter_test", []byte("allowed")))
+	d.Dispatch(event.NewBaseEvent("filter_test", []byte("blocked2")))
+
+	if receivedCount.Load() != 1 {
+		t.Errorf("receivedCount = %d, want 1", receivedCount.Load())
+	}
+}
+
 // TestEventDispatcher_ConcurrentRegisterAndDispatch verifies that listeners
 // can be registered concurrently while events are being dispatched.
 func TestEventDispatcher_ConcurrentRegisterAndDispatch(t *testing.T) {

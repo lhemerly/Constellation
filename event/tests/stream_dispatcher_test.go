@@ -152,6 +152,36 @@ func TestStreamEventDispatcher_ConcurrentDispatch(t *testing.T) {
 	}
 }
 
+func TestStreamEventDispatcher_FilteredStreamListener(t *testing.T) {
+	d := event.NewStreamEventDispatcher()
+
+	var receivedCount atomic.Int64
+	d.RegisterFilteredStreamListener("filter_stream", func(e event.StreamEvent) bool {
+		// Only allow events where sequence is even
+		return e.GetSequence()%2 == 0
+	}, func(e event.StreamEvent) {
+		receivedCount.Add(1)
+	})
+
+	d.DispatchStream(event.NewBaseStreamEvent("filter_stream", []byte("d"), 1, false)) // Blocked
+	d.DispatchStream(event.NewBaseStreamEvent("filter_stream", []byte("d"), 2, false)) // Allowed
+	d.DispatchStream(event.NewBaseStreamEvent("filter_stream", []byte("d"), 3, false)) // Blocked
+	d.DispatchStream(event.NewBaseStreamEvent("filter_stream", []byte("d"), 4, true))  // Allowed
+
+	// Allow the asynchronous dispatch to complete.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if receivedCount.Load() == 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if receivedCount.Load() != 2 {
+		t.Errorf("receivedCount = %d, want 2", receivedCount.Load())
+	}
+}
+
 // TestStreamEventDispatcher_InheritsEventDispatcher verifies that the
 // StreamEventDispatcher also works as a standard EventDispatcher.
 func TestStreamEventDispatcher_InheritsEventDispatcher(t *testing.T) {

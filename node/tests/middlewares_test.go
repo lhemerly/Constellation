@@ -270,6 +270,81 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 10 requests per second, with a burst of 2.
+	// We'll test the burst capacity.
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Burst 1: Success
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected nil error on first request, got %v", err)
+	}
+
+	// Burst 2: Success
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected nil error on second request, got %v", err)
+	}
+
+	// Request 3: Should fail (rate limit exceeded) since bucket is empty
+	// and not enough time has passed to refill 1 token (0.1s).
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time to refill at least one token
+	time.Sleep(150 * time.Millisecond)
+
+	// Request 4: Should succeed after refill
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected nil error after waiting, got %v", err)
+	}
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	expectedErr := errors.New("invalid input")
+
+	// Validator that rejects empty payloads
+	n.Use(node.ValidatorMiddleware(func(input []byte) error {
+		if len(input) == 0 {
+			return expectedErr
+		}
+		return nil
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return append([]byte("valid: "), input...), nil
+	})
+
+	// 1. Valid input
+	res, err := n.Process([]byte("data"))
+	if err != nil {
+		t.Fatalf("expected nil error for valid input, got %v", err)
+	}
+	if string(res) != "valid: data" {
+		t.Errorf("expected 'valid: data', got '%s'", string(res))
+	}
+
+	// 2. Invalid input (empty)
+	_, err = n.Process([]byte{})
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected validation error, got %v", err)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})
