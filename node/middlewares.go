@@ -12,6 +12,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrValidationFailed   = errors.New("validation failed")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,96 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// Metrics struct tracks the performance and usage of a node.
+type Metrics struct {
+	TotalRequests int64
+	Successes     int64
+	Failures      int64
+	TotalDuration time.Duration
+	mu            sync.RWMutex
+}
+
+// MetricsMiddleware tracks requests, successes, failures, and processing time using the provided Metrics struct.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			start := time.Now()
+
+			metrics.mu.Lock()
+			metrics.TotalRequests++
+			metrics.mu.Unlock()
+
+			output, err := next(input)
+
+			duration := time.Since(start)
+
+			metrics.mu.Lock()
+			metrics.TotalDuration += duration
+			if err != nil {
+				metrics.Failures++
+			} else {
+				metrics.Successes++
+			}
+			metrics.mu.Unlock()
+
+			return output, err
+		}
+	}
+}
+
+// ValidatorMiddleware runs a custom validation function on the input before passing it to the next middleware.
+// If the validation function returns an error, processing stops and the error is returned wrapped in ErrValidationFailed.
+func ValidatorMiddleware(validator func([]byte) error) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if err := validator(input); err != nil {
+				return nil, errors.Join(ErrValidationFailed, err)
+			}
+			return next(input)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the rate of processing requests using a token bucket algorithm.
+func RateLimitMiddleware(rate time.Duration, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64
+		lastRefill time.Time
+	)
+
+	tokens = float64(burst)
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Refill tokens
+			tokensToAdd := float64(elapsed) / float64(rate)
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > float64(burst) {
+					tokens = float64(burst)
+				}
+				lastRefill = now
+			}
+
+			if tokens >= 1 {
+				tokens -= 1
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
 		}
 	}
 }
