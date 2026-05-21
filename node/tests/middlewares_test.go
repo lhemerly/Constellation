@@ -314,3 +314,127 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 2 requests per 100ms
+	n.Use(node.RateLimitMiddleware(100*time.Millisecond, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. First two requests should succeed
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	res, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Third request should fail immediately
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for token refill
+	time.Sleep(150 * time.Millisecond)
+
+	// 4. Next request should succeed
+	res, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.ValidatorMiddleware(func(input []byte) error {
+		if string(input) == "invalid" {
+			return errors.New("invalid input")
+		}
+		return nil
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Valid input
+	res, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Invalid input
+	_, err = n.Process([]byte("invalid"))
+	if !errors.Is(err, node.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// 1. Successful request
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Failed request
+	fail = true
+	_, err = n.Process([]byte("req2"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// 3. Check metrics
+	if metrics.TotalRequests != 2 {
+		t.Errorf("expected 2 total requests, got %d", metrics.TotalRequests)
+	}
+	if metrics.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", metrics.Failures)
+	}
+	if metrics.TotalDuration == 0 {
+		t.Errorf("expected total duration > 0, got %v", metrics.TotalDuration)
+	}
+}
