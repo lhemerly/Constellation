@@ -89,6 +89,9 @@ func main() {
         return []byte(fmt.Sprintf("Processed: %s", input)), nil
     })
 
+    // Add a middleware
+    n.Use(node.LoggingMiddleware)
+
     // Process data
     output, err := n.Process([]byte("Hello, Node!"))
     if err != nil {
@@ -161,18 +164,18 @@ func main() {
     }
 
     // Connect
-    if err := (*conn).Connect(ctx); err != nil {
+    if err := conn.Connect(ctx); err != nil {
         log.Fatalf("Failed to connect: %v", err)
     }
-    defer (*conn).Disconnect()
+    defer conn.Disconnect()
 
     // Send data
-    if err := (*conn).Send(ctx, []byte("Hello, server!")); err != nil {
+    if err := conn.Send(ctx, []byte("Hello, server!")); err != nil {
         log.Fatalf("Failed to send data: %v", err)
     }
 
     // Receive data
-    data, err := (*conn).Receive(ctx)
+    data, err := conn.Receive(ctx)
     if err != nil {
         log.Fatalf("Failed to receive data: %v", err)
     }
