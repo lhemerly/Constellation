@@ -12,7 +12,72 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrFiltered           = errors.New("message filtered")
 )
+
+// RateLimitMiddleware limits the rate of requests processed by a node using a token bucket algorithm.
+func RateLimitMiddleware(rate float64, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			// Refill tokens
+			elapsed := now.Sub(lastRefill).Seconds()
+			tokens += elapsed * rate
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastRefill = now
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// FilterMiddleware conditionally drops messages based on a provided predicate function.
+// If the predicate returns false, it bypasses processing and returns ErrFiltered.
+func FilterMiddleware(predicate func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !predicate(input) {
+				return nil, ErrFiltered
+			}
+			return next(input)
+		}
+	}
+}
+
+// FallbackMiddleware catches errors from the processing function and returns a predefined fallback response.
+func FallbackMiddleware(fallback []byte) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				// Clone the fallback to avoid external modifications
+				fallbackCopy := make([]byte, len(fallback))
+				copy(fallbackCopy, fallback)
+				return fallbackCopy, nil
+			}
+			return output, nil
+		}
+	}
+}
 
 // LoggingMiddleware logs the payload size and processing time.
 func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
