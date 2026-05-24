@@ -314,3 +314,69 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. First request should succeed
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 2. Second request should succeed
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 3. Third request should fail (rate limit exceeded)
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 4. Wait for limit to reset
+	time.Sleep(60 * time.Millisecond)
+
+	// 5. Request should succeed again
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestMiddlewares_Filter(t *testing.T) {
+	n := node.NewBaseNode("filter-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.FilterMiddleware(func(input []byte) bool {
+		return string(input) == "allowed"
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("processed"), nil
+	})
+
+	// 1. Allowed input should succeed
+	res, err := n.Process([]byte("allowed"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "processed" {
+		t.Errorf("expected processed, got %s", string(res))
+	}
+
+	// 2. Disallowed input should be filtered out
+	_, err = n.Process([]byte("disallowed"))
+	if !errors.Is(err, node.ErrFilteredOut) {
+		t.Fatalf("expected ErrFilteredOut, got %v", err)
+	}
+}

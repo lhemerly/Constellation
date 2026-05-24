@@ -12,6 +12,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrFilteredOut        = errors.New("input was filtered out")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,50 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware enforces a maximum number of requests over a specific duration.
+// Note: This is a simple counter-based approach (sliding window could be added for better accuracy).
+func RateLimitMiddleware(limit int, duration time.Duration) Middleware {
+	var (
+		mu        sync.Mutex
+		count     int
+		startTime time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			if startTime.IsZero() || now.Sub(startTime) > duration {
+				startTime = now
+				count = 0
+			}
+
+			if count >= limit {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			count++
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// FilterMiddleware conditionally prevents processing based on the input.
+func FilterMiddleware(filterFunc func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !filterFunc(input) {
+				return nil, ErrFilteredOut
+			}
+			return next(input)
 		}
 	}
 }
