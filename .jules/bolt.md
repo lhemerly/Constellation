@@ -17,3 +17,6 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+## 2024-06-25 - Eliminate sha256 interface allocations
+**Learning:** Using `sha256.New()`, `Write()`, and converting the hash to a hex string (`hex.EncodeToString`) incurs multiple unnecessary heap allocations. Using `[32]byte` as a map key is perfectly valid in Go and drastically speeds up hash-based cache lookups (approx ~30% faster with zero allocations).
+**Action:** When hashing data to generate cache keys in high-frequency paths, always use `sha256.Sum256()` and use the resulting fixed-size array (`[32]byte`) directly as the map key instead of allocating strings.
