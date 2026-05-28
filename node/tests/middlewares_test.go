@@ -26,6 +26,48 @@ func TestMiddlewares_Logging(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	limit := 2
+	window := 50 * time.Millisecond
+	n.Use(node.RateLimitMiddleware(limit, window))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Initial requests within limit should succeed
+	for i := 0; i < limit; i++ {
+		res, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("expected nil error on request %d, got %v", i+1, err)
+		}
+		if string(res) != "success" {
+			t.Errorf("expected success on request %d, got %s", i+1, string(res))
+		}
+	}
+
+	// 2. Request exceeding limit should fail
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for the window to pass to replenish tokens
+	time.Sleep(window + 10*time.Millisecond)
+
+	// 4. Request after window should succeed again
+	res, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error after wait, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success after wait, got %s", string(res))
+	}
+}
+
 func TestMiddlewares_Retry_Success(t *testing.T) {
 	n := node.NewBaseNode("retry-node")
 	defer cleanupNodes(t, []node.Node{n})
