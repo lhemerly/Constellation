@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,46 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests allowed within a specific time window.
+func RateLimitMiddleware(limit int, window time.Duration) Middleware {
+	var (
+		mu      sync.Mutex
+		tokens  int       = limit
+		lastRef time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRef)
+
+			// Refill tokens based on elapsed time and the rate
+			tokensToAdd := int(float64(elapsed) / float64(window) * float64(limit))
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > limit {
+					tokens = limit
+				}
+				// Advance lastRef by the exact amount of time corresponding to the tokens added
+				// to avoid losing fractional token accumulation over multiple fast calls.
+				durationPerToken := float64(window) / float64(limit)
+				lastRef = lastRef.Add(time.Duration(float64(tokensToAdd) * durationPerToken))
+			}
+
+			if tokens > 0 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
 		}
 	}
 }
