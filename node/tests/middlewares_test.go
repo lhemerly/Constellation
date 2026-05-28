@@ -314,3 +314,19 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func BenchmarkCacheMiddleware(b *testing.B) {
+	mockProcess := func(input []byte) ([]byte, error) {
+		return input, nil
+	}
+
+	middleware := node.CacheMiddleware(time.Minute)
+	processFunc := middleware(mockProcess)
+
+	input := []byte("test input data for caching")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = processFunc(input)
+	}
+}
