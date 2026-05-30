@@ -241,6 +241,44 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(2, 100*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Request 1: should succeed
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error for req1, got %v", err)
+	}
+
+	// Request 2: should succeed
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error for req2, got %v", err)
+	}
+
+	// Request 3: should fail with ErrRateLimitExceeded
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded for req3, got %v", err)
+	}
+
+	// Wait for the duration to pass
+	time.Sleep(150 * time.Millisecond)
+
+	// Request 4: should succeed again
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error for req4 after wait, got %v", err)
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
