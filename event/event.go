@@ -29,7 +29,7 @@
 //	    fmt.Printf("Stream chunk seq=%d data=%s\n", e.GetSequence(), e.GetData())
 //	})
 //
-//	chunk := event.NewBaseStreamEvent("sensor", []byte("data-chunk"), 1)
+//	chunk := event.NewBaseStreamEvent("sensor", []byte("data-chunk"), 1, true)
 //	streamDisp.DispatchStream(chunk)
 package event
 
