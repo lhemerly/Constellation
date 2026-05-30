@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,40 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests that can be processed within a given duration.
+func RateLimitMiddleware(maxRequests int, duration time.Duration) Middleware {
+	var (
+		mu       sync.Mutex
+		requests []time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			// Remove outdated requests
+			var i int
+			for i = 0; i < len(requests); i++ {
+				if now.Sub(requests[i]) <= duration {
+					break
+				}
+			}
+			requests = requests[i:]
+
+			if len(requests) >= maxRequests {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			requests = append(requests, now)
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }
