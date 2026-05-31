@@ -270,6 +270,54 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Rate of 10 requests per second, capacity of 2
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Consume the first token
+	res, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Consume the second token
+	res, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 3. Third request should fail immediately
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 4. Wait for token to be replenished (rate is 10/sec, so 1 token every 100ms)
+	time.Sleep(150 * time.Millisecond)
+
+	// 5. Token should be replenished, request succeeds
+	res, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})
