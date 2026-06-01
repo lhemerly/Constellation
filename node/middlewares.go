@@ -12,6 +12,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrThrottled          = errors.New("request throttled")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,63 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware restricts the number of requests within a given time window.
+func RateLimitMiddleware(maxRequests int, window time.Duration) Middleware {
+	var (
+		mu       sync.Mutex
+		requests []time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			// Clean up old requests outside the window
+			validRequests := requests[:0]
+			for _, t := range requests {
+				if now.Sub(t) <= window {
+					validRequests = append(validRequests, t)
+				}
+			}
+			requests = validRequests
+
+			if len(requests) >= maxRequests {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			requests = append(requests, now)
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// ThrottleMiddleware enforces a minimum time interval between consecutive requests.
+func ThrottleMiddleware(interval time.Duration) Middleware {
+	var (
+		mu       sync.Mutex
+		lastTime time.Time
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			if !lastTime.IsZero() && now.Sub(lastTime) < interval {
+				mu.Unlock()
+				return nil, ErrThrottled
+			}
+			lastTime = now
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }
