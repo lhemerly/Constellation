@@ -314,3 +314,73 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Request 1
+	_, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Request 2
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Request 3 - should fail due to rate limit
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for window to pass
+	time.Sleep(60 * time.Millisecond)
+
+	// Request 4 - should succeed now
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error after window, got %v", err)
+	}
+}
+
+func TestMiddlewares_Throttle(t *testing.T) {
+	n := node.NewBaseNode("throttle-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.ThrottleMiddleware(50 * time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Request 1
+	_, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// Request 2 - immediately after, should fail
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrThrottled) {
+		t.Fatalf("expected ErrThrottled, got %v", err)
+	}
+
+	// Wait for interval
+	time.Sleep(60 * time.Millisecond)
+
+	// Request 3 - should succeed now
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error after interval, got %v", err)
+	}
+}
