@@ -12,7 +12,73 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrFiltered           = errors.New("input filtered")
 )
+
+// FilterMiddleware short-circuits processing and returns ErrFiltered if the input doesn't match the predicate.
+func FilterMiddleware(predicate func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !predicate(input) {
+				return nil, ErrFiltered
+			}
+			return next(input)
+		}
+	}
+}
+
+// FallbackMiddleware executes a fallback function if the next process fails.
+func FallbackMiddleware(fallback func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallback(input, err)
+			}
+			return output, nil
+		}
+	}
+}
+
+// RateLimitMiddleware limits the rate of requests processed by a node using a Token Bucket algorithm.
+func RateLimitMiddleware(rate time.Duration, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int
+		lastRefill time.Time
+	)
+
+	tokens = burst
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := int(elapsed / rate)
+
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > burst {
+					tokens = burst
+				}
+				lastRefill = now.Add(-elapsed % rate)
+			}
+
+			if tokens > 0 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
 
 // LoggingMiddleware logs the payload size and processing time.
 func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
