@@ -7,6 +7,115 @@ import (
 	"time"
 )
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(10*time.Millisecond, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. First request should succeed (tokens = 1)
+	res, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Second request should succeed (tokens = 0)
+	res, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 3. Third request should fail immediately (tokens = 0)
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 4. Wait for token refill
+	time.Sleep(15 * time.Millisecond)
+
+	// 5. Fourth request should succeed (tokens = 0)
+	res, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+}
+
+func TestMiddlewares_Fallback(t *testing.T) {
+	n := node.NewBaseNode("fallback-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.FallbackMiddleware(func(input []byte, err error) ([]byte, error) {
+		return []byte("fallback"), nil
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// 1. Successful request
+	res, err := n.Process([]byte("success"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Failing request, triggers fallback
+	res, err = n.Process([]byte("fail"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "fallback" {
+		t.Errorf("expected fallback, got %s", string(res))
+	}
+}
+
+func TestMiddlewares_Filter(t *testing.T) {
+	n := node.NewBaseNode("filter-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.FilterMiddleware(func(input []byte) bool {
+		return string(input) == "allow"
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Allowed request
+	res, err := n.Process([]byte("allow"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Filtered request
+	_, err = n.Process([]byte("block"))
+	if !errors.Is(err, node.ErrFiltered) {
+		t.Fatalf("expected ErrFiltered, got %v", err)
+	}
+}
+
 func TestMiddlewares_Logging(t *testing.T) {
 	n := node.NewBaseNode("log-node")
 	defer cleanupNodes(t, []node.Node{n})
