@@ -12,6 +12,8 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrValidationFailed   = errors.New("validation failed")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,100 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the number of requests using a token bucket algorithm.
+func RateLimiterMiddleware(rate int, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64 = float64(burst)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Refill tokens
+			tokens += elapsed.Seconds() * float64(rate)
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastRefill = now
+
+			// Check if we have enough tokens
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// ValidatorMiddleware fails fast if the input does not pass the provided validation function.
+func ValidatorMiddleware(validator func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !validator(input) {
+				return nil, ErrValidationFailed
+			}
+			return next(input)
+		}
+	}
+}
+
+// Metrics tracks processing statistics for a node.
+type Metrics struct {
+	mu            sync.RWMutex
+	TotalRequests uint64
+	Successes     uint64
+	Errors        uint64
+	TotalDuration time.Duration
+}
+
+// Snapshot returns a copy of the current metrics.
+func (m *Metrics) Snapshot() Metrics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return Metrics{
+		TotalRequests: m.TotalRequests,
+		Successes:     m.Successes,
+		Errors:        m.Errors,
+		TotalDuration: m.TotalDuration,
+	}
+}
+
+// MetricsMiddleware records execution metrics such as request counts and total duration.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			start := time.Now()
+
+			metrics.mu.Lock()
+			metrics.TotalRequests++
+			metrics.mu.Unlock()
+
+			output, err := next(input)
+			duration := time.Since(start)
+
+			metrics.mu.Lock()
+			if err != nil {
+				metrics.Errors++
+			} else {
+				metrics.Successes++
+			}
+			metrics.TotalDuration += duration
+			metrics.mu.Unlock()
+
+			return output, err
 		}
 	}
 }
