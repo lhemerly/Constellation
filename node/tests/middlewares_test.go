@@ -7,6 +7,112 @@ import (
 	"time"
 )
 
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 10 tokens per second, burst of 2
+	n.Use(node.RateLimiterMiddleware(10, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Should succeed (token 1)
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 2. Should succeed (token 2)
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 3. Should fail (burst exceeded)
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 4. Wait for refill (10 tokens/sec = 1 token per 100ms)
+	time.Sleep(150 * time.Millisecond)
+
+	// 5. Should succeed after refill
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Validator that requires the input to be exactly "valid"
+	n.Use(node.ValidatorMiddleware(func(input []byte) bool {
+		return string(input) == "valid"
+	}))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Should succeed
+	_, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 2. Should fail validation
+	_, err = n.Process([]byte("invalid"))
+	if !errors.Is(err, node.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("simulated failure")
+		}
+		// Simulate some processing time
+		time.Sleep(10 * time.Millisecond)
+		return []byte("success"), nil
+	})
+
+	// 1. Successful request
+	_, _ = n.Process([]byte("success1"))
+
+	// 2. Another successful request
+	_, _ = n.Process([]byte("success2"))
+
+	// 3. Failed request
+	_, _ = n.Process([]byte("fail"))
+
+	snap := metrics.Snapshot()
+
+	if snap.TotalRequests != 3 {
+		t.Errorf("expected 3 total requests, got %d", snap.TotalRequests)
+	}
+	if snap.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", snap.Successes)
+	}
+	if snap.Errors != 1 {
+		t.Errorf("expected 1 error, got %d", snap.Errors)
+	}
+	if snap.TotalDuration < 20*time.Millisecond {
+		t.Errorf("expected total duration >= 20ms, got %v", snap.TotalDuration)
+	}
+}
+
 func TestMiddlewares_Logging(t *testing.T) {
 	n := node.NewBaseNode("log-node")
 	defer cleanupNodes(t, []node.Node{n})
