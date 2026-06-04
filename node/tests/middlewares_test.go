@@ -7,6 +7,60 @@ import (
 	"time"
 )
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Capacity of 2, 1 token refilled every 50ms
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Consume token 1
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Consume token 2
+	res, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 3. Tokens exhausted, should fail
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 4. Wait for refill
+	time.Sleep(55 * time.Millisecond)
+
+	// 5. Should have 1 token refilled
+	res, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 6. Should be exhausted again
+	_, err = n.Process([]byte("req5"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
+
 func TestMiddlewares_Logging(t *testing.T) {
 	n := node.NewBaseNode("log-node")
 	defer cleanupNodes(t, []node.Node{n})
