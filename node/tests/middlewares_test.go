@@ -270,6 +270,44 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 10 requests per second, burst size of 2
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Burst should allow 2 immediate requests
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected nil error for request 1, got %v", err)
+	}
+
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected nil error for request 2, got %v", err)
+	}
+
+	// 3rd request should fail immediately because burst is exhausted
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time to replenish 1 token (1/10th of a second = 100ms)
+	time.Sleep(150 * time.Millisecond)
+
+	// Should succeed now
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected nil error after waiting, got %v", err)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})
