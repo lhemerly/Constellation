@@ -1,0 +1,10 @@
+--- node/fanout_node.go
++++ node/fanout_node.go
+@@ -95,7 +95,7 @@
+		}
+	}
+
+-	if len(joinErrs) == len(dests) {
++	if len(finalOutput) == 0 && len(dests) > 0 {
+		return nil, errors.Join(joinErrs...)
+	}

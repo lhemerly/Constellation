@@ -241,6 +241,45 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 1 token capacity, refills every 50ms
+	n.Use(node.RateLimiterMiddleware(1, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Initial process should consume the token and succeed
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Second process immediately should fail due to no tokens
+	_, err = n.Process([]byte("req2"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for token to refill
+	time.Sleep(60 * time.Millisecond)
+
+	// 4. Third process should succeed again
+	res, err = n.Process([]byte("req3"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
