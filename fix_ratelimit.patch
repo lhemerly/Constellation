@@ -1,0 +1,11 @@
+--- node/middlewares.go
++++ node/middlewares.go
+@@ -183,7 +183,7 @@
+				if tokens > capacity {
+					tokens = capacity
+				}
+-				lastRefill = now
++				lastRefill = lastRefill.Add(time.Duration(tokensToAdd) * refillRate)
+			}
+
+			if tokens > 0 {

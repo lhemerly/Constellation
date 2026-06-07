@@ -184,7 +184,7 @@ func RateLimiterMiddleware(capacity int, refillRate time.Duration) Middleware {
 				if tokens > capacity {
 					tokens = capacity
 				}
-				lastRefill = lastRefill.Add(time.Duration(tokensToAdd) * refillRate)
+				lastRefill = now
 			}
 
 			if tokens > 0 {
