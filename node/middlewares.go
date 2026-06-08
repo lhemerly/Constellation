@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,46 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the number of requests processed over time using a Token Bucket algorithm.
+// refillRate is the time duration required to accrue a single token. burstCapacity is the maximum number of tokens.
+func RateLimiterMiddleware(refillRate time.Duration, burstCapacity int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int = burstCapacity
+		lastRefill     = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			// Refill tokens
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := int(elapsed / refillRate)
+
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > burstCapacity {
+					tokens = burstCapacity
+				}
+				// update the lastRefill timestamp by adding the exact duration for the accrued tokens
+				// rather than resetting it to time.Now() to prevent micro-drifts and token leakage.
+				lastRefill = lastRefill.Add(time.Duration(tokensToAdd) * refillRate)
+			}
+
+			if tokens > 0 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
 		}
 	}
 }
