@@ -75,7 +75,13 @@ func (mr *MapReduceNode) mapReduceProcess(input []byte) ([]byte, error) {
 
 	// Flatten results into a single byte slice for the reducer
 	// Format: simple concatenation for this basic implementation.
-	var reducedInput []byte
+	// ⚡ Bolt Optimization: Pre-calculate total length and pre-allocate capacity
+	// to prevent repeated memory reallocations during append.
+	totalLen := 0
+	for _, res := range results {
+		totalLen += len(res)
+	}
+	reducedInput := make([]byte, 0, totalLen)
 	for _, res := range results {
 		reducedInput = append(reducedInput, res...)
 	}
