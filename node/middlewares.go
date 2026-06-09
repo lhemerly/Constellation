@@ -12,7 +12,52 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
+
+// RateLimitMiddleware enforces a token bucket rate limit on processing.
+func RateLimitMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int = capacity
+		lastRefill time.Time
+	)
+
+	// Avoid uninitialized time if first request comes in immediately
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			// Refill tokens
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := int(elapsed / refillRate)
+
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > capacity {
+					tokens = capacity
+				}
+
+				// Instead of resetting to time.Now(), advance lastRefill by the exact duration
+				// corresponding to the accrued tokens. This prevents micro-drifts and token leakage.
+				lastRefill = lastRefill.Add(time.Duration(tokensToAdd) * refillRate)
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
 
 // LoggingMiddleware logs the payload size and processing time.
 func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {

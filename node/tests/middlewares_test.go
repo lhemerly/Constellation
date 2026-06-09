@@ -7,6 +7,44 @@ import (
 	"time"
 )
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 2 tokens, refills 1 token every 100ms
+	n.Use(node.RateLimitMiddleware(2, 100*time.Millisecond))
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	// 1st request should pass
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected 1st request to pass, got: %v", err)
+	}
+
+	// 2nd request should pass
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected 2nd request to pass, got: %v", err)
+	}
+
+	// 3rd request should fail immediately
+	_, err = n.Process([]byte("req3"))
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("expected ErrRateLimitExceeded, got: %v", err)
+	}
+
+	// Wait for refill (100ms + small buffer)
+	time.Sleep(120 * time.Millisecond)
+
+	// 4th request should pass again
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected 4th request to pass after refill, got: %v", err)
+	}
+}
+
 func TestMiddlewares_Logging(t *testing.T) {
 	n := node.NewBaseNode("log-node")
 	defer cleanupNodes(t, []node.Node{n})
