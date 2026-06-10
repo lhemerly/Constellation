@@ -314,3 +314,47 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Capacity of 2, refills 1 token every 50ms
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("ok"), nil
+	})
+
+	// 1. Initial burst (2 requests should succeed)
+	for i := 0; i < 2; i++ {
+		res, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("request %d failed: %v", i+1, err)
+		}
+		if string(res) != "ok" {
+			t.Fatalf("expected 'ok', got %s", string(res))
+		}
+	}
+
+	// 2. Exceed limit (3rd request should fail immediately)
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for 1 token to refill
+	time.Sleep(55 * time.Millisecond)
+
+	// 4. Request should now succeed
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("request after refill failed: %v", err)
+	}
+
+	// 5. Subsequent request should fail again (only 1 token refilled)
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
