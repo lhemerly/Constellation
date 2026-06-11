@@ -17,3 +17,6 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+## 2024-05-17 - Pre-calculating Slice Capacity in MapReduceNode
+**Learning:** In `MapReduceNode.mapReduceProcess`, aggregating arbitrary sizes of multiple slices (like results from mappers) using `append` in a loop over slices causes repeated memory allocations, severely impacting performance for large loads. Pre-calculating the capacity first significantly reduces runtime overhead and allocations.
+**Action:** When flattening or concatenating a dynamic number of byte slices in Go, loop once to compute the total size and use `make([]byte, 0, totalLen)` to pre-allocate before appending.
