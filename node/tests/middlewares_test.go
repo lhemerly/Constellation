@@ -314,3 +314,38 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Capacity of 2, refill 1 token every 50ms
+	n.Use(node.RateLimitMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two should succeed
+	for i := 0; i < 2; i++ {
+		_, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("expected success on request %d, got error: %v", i+1, err)
+		}
+	}
+
+	// Third should fail immediately due to rate limit
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for refill (50ms should refill 1 token)
+	time.Sleep(60 * time.Millisecond)
+
+	// Now should succeed again
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected success after refill, got error: %v", err)
+	}
+}
