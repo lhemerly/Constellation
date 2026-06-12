@@ -25,8 +25,8 @@ The `node` package provides abstractions for creating and managing nodes within 
 - Data Processing
 - Subscription Management
 - Event Notification
-- **Advanced Node Types**: Includes `FailoverNode` (primary/secondary logic), `LoadBalancerNode` (round-robin distribution), `PipelineNode` (sequential stage processing), `RouterNode` (conditional message routing), and `MapReduceNode` (parallel mappers and a single reducer).
-- **Middlewares**: Supports composing node processing chains with middlewares such as `LoggingMiddleware`, `RetryMiddleware`, `RecoveryMiddleware`, `CacheMiddleware`, `TimeoutMiddleware`, and `CircuitBreakerMiddleware`.
+- **Advanced Node Types**: Includes `FailoverNode` (primary/secondary logic), `LoadBalancerNode` (round-robin distribution), `PipelineNode` (sequential stage processing), `RouterNode` (conditional message routing), `MapReduceNode` (parallel mappers and a single reducer), `ScatterGatherNode` (parallel broadcast with quorum gathering), and `PubSubNode` (topic-based publish/subscribe capabilities).
+- **Middlewares**: Supports composing node processing chains with middlewares such as `LoggingMiddleware`, `RetryMiddleware`, `RecoveryMiddleware`, `CacheMiddleware`, `TimeoutMiddleware`, `CircuitBreakerMiddleware`, and `RateLimiterMiddleware`.
 
 ### 2. Connection Package
 
