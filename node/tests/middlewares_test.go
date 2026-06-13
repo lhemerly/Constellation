@@ -241,6 +241,88 @@ func TestMiddlewares_Cache(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 2 tokens immediately, then 1 token every 100ms
+	n.Use(node.RateLimitMiddleware(2, 10.0)) // 10 tokens/sec = 1 per 100ms
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1st request should pass
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected 1st request to succeed, got %v", err)
+	}
+
+	// 2nd request should pass (burst)
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected 2nd request to succeed, got %v", err)
+	}
+
+	// 3rd request should fail (bucket empty)
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for 1 token to refill (100ms + some buffer)
+	time.Sleep(150 * time.Millisecond)
+
+	// 4th request should pass
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected 4th request to succeed after wait, got %v", err)
+	}
+
+	// 5th request should fail again immediately
+	_, err = n.Process([]byte("input5"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded on 5th request, got %v", err)
+	}
+}
+
+func TestMiddlewares_Fallback(t *testing.T) {
+	n := node.NewBaseNode("fallback-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	fallbackFunc := func(input []byte, err error) ([]byte, error) {
+		return []byte("fallback_response"), nil
+	}
+
+	n.Use(node.FallbackMiddleware(fallbackFunc))
+
+	// Base process throws an error
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, errors.New("simulated error")
+	})
+
+	res, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "fallback_response" {
+		t.Errorf("expected 'fallback_response', got '%s'", string(res))
+	}
+
+	// Base process succeeds
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	res, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected 'success', got '%s'", string(res))
+	}
+}
+
 func TestMiddlewares_Timeout(t *testing.T) {
 	n := node.NewBaseNode("timeout-node")
 	defer cleanupNodes(t, []node.Node{n})
