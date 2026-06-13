@@ -12,6 +12,7 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +58,58 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware applies a token-bucket rate limit.
+// It allows bursts up to the capacity and refills at the specified rate per second.
+func RateLimitMiddleware(capacity int, tokensPerSecond float64) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64 = float64(capacity)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+
+			// Refill tokens
+			tokensToAdd := elapsed * tokensPerSecond
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > float64(capacity) {
+					tokens = float64(capacity)
+				}
+				// Use precise token duration math to avoid micro-drifts:
+				lastRefill = lastRefill.Add(time.Duration(tokensToAdd / tokensPerSecond * float64(time.Second)))
+			}
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// FallbackMiddleware calls a fallback function if the base processing function returns an error.
+func FallbackMiddleware(fallback func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallback(input, err)
+			}
+			return output, nil
 		}
 	}
 }
