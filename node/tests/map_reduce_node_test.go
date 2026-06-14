@@ -86,3 +86,30 @@ func TestMapReduceNode_PanicsOnNilReducer(t *testing.T) {
 	mapper := node.NewBaseNode("mapper")
 	node.NewMapReduceNode("mr", []node.Node{mapper}, nil)
 }
+
+func BenchmarkMapReduceNode_Flattening(b *testing.B) {
+	mapper1 := node.NewBaseNode("mapper-1")
+	mapper1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	mapper2 := node.NewBaseNode("mapper-2")
+	mapper2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	reducer := node.NewBaseNode("reducer")
+	reducer.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	mrNode := node.NewMapReduceNode("mr-node", []node.Node{mapper1, mapper2}, reducer)
+	mrNode.Create()
+	defer mrNode.Delete()
+
+	input := make([]byte, 1024) // 1KB input
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mrNode.Process(input)
+	}
+}
