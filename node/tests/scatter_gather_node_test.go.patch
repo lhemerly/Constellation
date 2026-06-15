@@ -1,0 +1,89 @@
+<<<<<<< SEARCH
+func TestScatterGatherNode_PartialFailure(t *testing.T) {
+	sg := node.NewScatterGatherNode("sg-node", 500*time.Millisecond)
+	sg.Create()
+	defer sg.Delete()
+
+	dest1 := node.NewBaseNode("dest1")
+	dest1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("A"), nil
+	})
+	dest1.Create()
+	defer dest1.Delete()
+
+	dest2 := node.NewBaseNode("dest2")
+	dest2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, errors.New("some error")
+	})
+	dest2.Create()
+	defer dest2.Delete()
+
+	sg.AddDestination(dest1)
+	sg.AddDestination(dest2)
+
+	res, err := sg.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if string(res) != "A" {
+		t.Errorf("expected output 'A', got %s", string(res))
+	}
+}
+=======
+func TestScatterGatherNode_PartialFailure(t *testing.T) {
+	sg := node.NewScatterGatherNode("sg-node", 500*time.Millisecond)
+	sg.Create()
+	defer sg.Delete()
+
+	dest1 := node.NewBaseNode("dest1")
+	dest1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("A"), nil
+	})
+	dest1.Create()
+	defer dest1.Delete()
+
+	dest2 := node.NewBaseNode("dest2")
+	dest2.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, errors.New("some error")
+	})
+	dest2.Create()
+	defer dest2.Delete()
+
+	sg.AddDestination(dest1)
+	sg.AddDestination(dest2)
+
+	res, err := sg.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if string(res) != "A" {
+		t.Errorf("expected output 'A', got %s", string(res))
+	}
+}
+
+func TestScatterGatherNode_CompleteFailure(t *testing.T) {
+	sg := node.NewScatterGatherNode("sg-node", 500*time.Millisecond)
+	sg.Create()
+	defer sg.Delete()
+
+	expectedErr := errors.New("some error")
+	dest1 := node.NewBaseNode("dest1")
+	dest1.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return nil, expectedErr
+	})
+	dest1.Create()
+	defer dest1.Delete()
+
+	sg.AddDestination(dest1)
+
+	_, err := sg.Process([]byte("input"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("expected expectedErr, got %v", err)
+	}
+}
+>>>>>>> REPLACE
