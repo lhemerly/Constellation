@@ -270,6 +270,106 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(10*time.Millisecond, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Burst allows 2 immediate successful requests
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 3rd request should fail immediately due to rate limit
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for 1 token to be refilled
+	time.Sleep(15 * time.Millisecond)
+
+	// Should succeed now
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error after wait, got %v", err)
+	}
+}
+
+func TestMiddlewares_ConcurrencyLimit(t *testing.T) {
+	n := node.NewBaseNode("concurrency-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.ConcurrencyLimitMiddleware(1))
+
+	blockCh := make(chan struct{})
+	startedCh := make(chan struct{})
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		close(startedCh) // Signal that process has started
+		<-blockCh        // Block the process
+		return []byte("done"), nil
+	})
+
+	// Start first process, which will block
+	go func() {
+		n.Process([]byte("req1"))
+	}()
+
+	// Wait for the first process to actually start and acquire the semaphore
+	<-startedCh
+
+	// Second process should fail immediately due to concurrency limit
+	_, err := n.Process([]byte("req2"))
+	if !errors.Is(err, node.ErrConcurrencyLimit) {
+		t.Fatalf("expected ErrConcurrencyLimit, got %v", err)
+	}
+
+	// Unblock the first process
+	close(blockCh)
+}
+
+func TestMiddlewares_Validator(t *testing.T) {
+	n := node.NewBaseNode("validator-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	validatorFunc := func(input []byte) bool {
+		return string(input) == "valid"
+	}
+
+	n.Use(node.ValidatorMiddleware(validatorFunc))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("processed"), nil
+	})
+
+	// 1. Valid input
+	res, err := n.Process([]byte("valid"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "processed" {
+		t.Errorf("expected 'processed', got '%s'", string(res))
+	}
+
+	// 2. Invalid input
+	_, err = n.Process([]byte("invalid"))
+	if !errors.Is(err, node.ErrValidationFailed) {
+		t.Fatalf("expected ErrValidationFailed, got %v", err)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})
