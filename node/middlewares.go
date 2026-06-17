@@ -12,6 +12,9 @@ import (
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
+	ErrValidationFailed   = errors.New("validation failed")
+	ErrConcurrencyLimit   = errors.New("concurrency limit reached")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +60,71 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware restricts the number of requests processed within a time window using a token bucket.
+func RateLimitMiddleware(rate time.Duration, burst int) Middleware {
+	tokens := burst
+	var lastTime time.Time
+	var mu sync.Mutex
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+
+			if lastTime.IsZero() {
+				lastTime = now
+			}
+
+			elapsed := now.Sub(lastTime)
+			tokensToAdd := int(elapsed / rate)
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > burst {
+					tokens = burst
+				}
+				lastTime = now
+			}
+
+			if tokens > 0 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// ConcurrencyLimitMiddleware limits the maximum number of concurrent processes using a semaphore.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				return next(input)
+			default:
+				return nil, ErrConcurrencyLimit
+			}
+		}
+	}
+}
+
+// ValidatorMiddleware runs a validation function on the input before processing.
+func ValidatorMiddleware(validator func([]byte) bool) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			if !validator(input) {
+				return nil, ErrValidationFailed
+			}
+			return next(input)
 		}
 	}
 }
