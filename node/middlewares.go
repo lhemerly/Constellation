@@ -2,7 +2,6 @@ package node
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"sync"
@@ -69,15 +68,15 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 	}
 
 	var (
-		mu    sync.RWMutex
-		cache = make(map[string]cacheEntry)
+		mu sync.RWMutex
+		// ⚡ Bolt: using [32]byte directly as map key instead of hex-encoded string to avoid allocations
+		cache = make(map[[32]byte]cacheEntry)
 	)
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			// ⚡ Bolt: Use Sum256 directly to avoid interface allocation and Write calls
+			key := sha256.Sum256(input)
 
 			mu.RLock()
 			entry, exists := cache[key]
