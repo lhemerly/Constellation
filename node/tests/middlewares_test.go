@@ -314,3 +314,48 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 5 tokens per second, burst size of 2
+	n.Use(node.RateLimitMiddleware(5.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Request 1: should pass (burst 2 -> 1)
+	_, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error on request 1: %v", err)
+	}
+
+	// Request 2: should pass (burst 1 -> 0)
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error on request 2: %v", err)
+	}
+
+	// Request 3: should fail immediately (bucket empty)
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time to replenish 1 token (1/5 second = 200ms)
+	time.Sleep(210 * time.Millisecond)
+
+	// Request 4: should pass now that bucket has replenished 1 token
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("unexpected error on request 4: %v", err)
+	}
+
+	// Request 5: should fail again as we just consumed the single token
+	_, err = n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
