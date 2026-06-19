@@ -61,6 +61,48 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 	}
 }
 
+// ErrRateLimitExceeded is returned when the rate limit token bucket is empty.
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimitMiddleware implements a token bucket algorithm to limit the rate of requests.
+func RateLimitMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = capacity
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Refill tokens
+			if elapsed >= refillRate {
+				tokensToAdd := int(elapsed / refillRate)
+				if tokensToAdd > 0 {
+					tokens += tokensToAdd
+					if tokens > capacity {
+						tokens = capacity
+					}
+					lastRefill = now
+				}
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
 // CacheMiddleware caches the output of successful processes for a given TTL, keyed by the hash of the input.
 func CacheMiddleware(ttl time.Duration) Middleware {
 	type cacheEntry struct {
