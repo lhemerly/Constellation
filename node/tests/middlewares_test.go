@@ -270,6 +270,89 @@ func TestMiddlewares_Timeout(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 2 requests immediately, refill rate won't catch up in short burst
+	n.Use(node.RateLimiterMiddleware(1, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1st request should succeed
+	res, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("unexpected error on 1st request: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2nd request should succeed
+	res, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("unexpected error on 2nd request: %v", err)
+	}
+
+	// 3rd request should fail (rate limit exceeded)
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	tracker := &node.MetricsTracker{}
+	n.Use(node.MetricsMiddleware(tracker))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond)
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// 1st request: Success
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 2nd request: Success
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 3rd request: Failure
+	fail = true
+	_, err = n.Process([]byte("req3"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// Verify metrics
+	if tracker.TotalRequests != 3 {
+		t.Errorf("expected 3 total requests, got %d", tracker.TotalRequests)
+	}
+	if tracker.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", tracker.Successes)
+	}
+	if tracker.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", tracker.Failures)
+	}
+	if tracker.TotalDuration <= 0 {
+		t.Errorf("expected TotalDuration > 0, got %d", tracker.TotalDuration)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	n := node.NewBaseNode("cb-empty-node")
 	defer cleanupNodes(t, []node.Node{n})
