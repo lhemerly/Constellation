@@ -6,13 +6,80 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
+
+// RateLimiterMiddleware limits the processing rate using a token bucket.
+func RateLimiterMiddleware(rate int, burst int) Middleware {
+	var (
+		mu     sync.Mutex
+		tokens = float64(burst)
+		last   = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(last).Seconds()
+			last = now
+
+			tokens += elapsed * float64(rate)
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+
+			if tokens < 1 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens -= 1
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// MetricsTracker holds atomic counters for metrics.
+type MetricsTracker struct {
+	TotalRequests int64
+	Successes     int64
+	Failures      int64
+	TotalDuration int64 // stored in nanoseconds
+}
+
+// MetricsMiddleware tracks the number of total, successful, and failed requests,
+// as well as the total processing time.
+func MetricsMiddleware(tracker *MetricsTracker) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddInt64(&tracker.TotalRequests, 1)
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start).Nanoseconds()
+
+			atomic.AddInt64(&tracker.TotalDuration, duration)
+
+			if err != nil {
+				atomic.AddInt64(&tracker.Failures, 1)
+			} else {
+				atomic.AddInt64(&tracker.Successes, 1)
+			}
+
+			return output, err
+		}
+	}
+}
 
 // LoggingMiddleware logs the payload size and processing time.
 func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
