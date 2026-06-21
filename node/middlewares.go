@@ -2,10 +2,10 @@ package node
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -61,6 +61,68 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 	}
 }
 
+// RateLimiterMiddleware limits the number of requests processed per second using a token bucket.
+func RateLimiterMiddleware(rate int, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64 = float64(burst)
+		lastUpdate         = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+			tokens += elapsed * float64(rate)
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastUpdate = now
+
+			if tokens >= 1 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+			mu.Unlock()
+
+			return nil, errors.New("rate limit exceeded")
+		}
+	}
+}
+
+// MetricsTracker stores execution metrics for the MetricsMiddleware.
+type MetricsTracker struct {
+	TotalRequests uint64
+	Successes     uint64
+	Failures      uint64
+	TotalDuration int64 // in nanoseconds
+}
+
+// MetricsMiddleware tracks processing metrics such as requests, successes, failures, and latency.
+func MetricsMiddleware(tracker *MetricsTracker) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&tracker.TotalRequests, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start).Nanoseconds()
+			atomic.AddInt64(&tracker.TotalDuration, duration)
+
+			if err != nil {
+				atomic.AddUint64(&tracker.Failures, 1)
+			} else {
+				atomic.AddUint64(&tracker.Successes, 1)
+			}
+
+			return output, err
+		}
+	}
+}
+
 // CacheMiddleware caches the output of successful processes for a given TTL, keyed by the hash of the input.
 func CacheMiddleware(ttl time.Duration) Middleware {
 	type cacheEntry struct {
@@ -70,14 +132,12 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 
 	var (
 		mu    sync.RWMutex
-		cache = make(map[string]cacheEntry)
+		cache = make(map[[32]byte]cacheEntry)
 	)
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			key := sha256.Sum256(input)
 
 			mu.RLock()
 			entry, exists := cache[key]

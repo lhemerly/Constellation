@@ -314,3 +314,91 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limiter-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Rate limit: 2 requests per second, burst: 2
+	n.Use(node.RateLimiterMiddleware(2, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// Burst capacity: first 2 requests should succeed immediately
+	for i := 0; i < 2; i++ {
+		_, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("expected success on burst %d, got %v", i+1, err)
+		}
+	}
+
+	// Next request should fail because bucket is empty
+	_, err := n.Process([]byte("input"))
+	if err == nil || err.Error() != "rate limit exceeded" {
+		t.Fatalf("expected 'rate limit exceeded' error, got %v", err)
+	}
+
+	// Wait 600ms (more than 500ms required for 1 token at 2 rps)
+	time.Sleep(600 * time.Millisecond)
+
+	// Now 1 token should be available
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected success after waiting, got %v", err)
+	}
+
+	// And the next immediately fails again
+	_, err = n.Process([]byte("input"))
+	if err == nil || err.Error() != "rate limit exceeded" {
+		t.Fatalf("expected 'rate limit exceeded' error, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	tracker := &node.MetricsTracker{}
+	n.Use(node.MetricsMiddleware(tracker))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond)
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// Process success
+	n.Process([]byte("input1"))
+
+	if tracker.TotalRequests != 1 {
+		t.Errorf("expected 1 total request, got %d", tracker.TotalRequests)
+	}
+	if tracker.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", tracker.Successes)
+	}
+	if tracker.Failures != 0 {
+		t.Errorf("expected 0 failures, got %d", tracker.Failures)
+	}
+	if tracker.TotalDuration == 0 {
+		t.Errorf("expected TotalDuration > 0, got %d", tracker.TotalDuration)
+	}
+
+	// Process failure
+	fail = true
+	n.Process([]byte("input2"))
+
+	if tracker.TotalRequests != 2 {
+		t.Errorf("expected 2 total requests, got %d", tracker.TotalRequests)
+	}
+	if tracker.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", tracker.Successes)
+	}
+	if tracker.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", tracker.Failures)
+	}
+}
