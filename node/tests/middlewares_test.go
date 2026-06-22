@@ -314,3 +314,55 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 2 requests immediately, refill 10 tokens per second (1 token per 100ms)
+	n.Use(node.RateLimitMiddleware(2, 10.0))
+
+	var executions int
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		executions++
+		return []byte("success"), nil
+	})
+
+	// 1. Initial requests within capacity should succeed
+	for i := 0; i < 2; i++ {
+		res, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("expected nil error on request %d, got %v", i, err)
+		}
+		if string(res) != "success" {
+			t.Errorf("expected success, got %s", string(res))
+		}
+	}
+	if executions != 2 {
+		t.Fatalf("expected 2 executions, got %d", executions)
+	}
+
+	// 2. Immediate next request should be rate-limited
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+	if executions != 2 {
+		t.Fatalf("expected executions to remain 2, got %d", executions)
+	}
+
+	// 3. Wait for refill (100ms for 1 token)
+	time.Sleep(150 * time.Millisecond)
+
+	// 4. Request should succeed again
+	res, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error after wait, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+	if executions != 3 {
+		t.Fatalf("expected 3 executions, got %d", executions)
+	}
+}
