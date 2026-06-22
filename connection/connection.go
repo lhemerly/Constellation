@@ -13,7 +13,7 @@
 // Usage:
 //
 //	factory := connection.NewConnectionFactory()
-//	conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051")
+//	conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
 //	if err != nil {
 //	    log.Fatalf("Failed to create connection: %v", err)
 //	}
