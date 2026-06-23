@@ -6,13 +6,85 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
+
+// Metrics holds processing statistics for the MetricsMiddleware.
+type Metrics struct {
+	Invocations         uint64
+	Successes           uint64
+	Failures            uint64
+	TotalProcessingTime int64 // Stored in nanoseconds
+}
+
+// MetricsMiddleware records invocations, successes, failures, and processing times.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.Invocations, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start)
+			atomic.AddInt64(&metrics.TotalProcessingTime, duration.Nanoseconds())
+
+			if err != nil {
+				atomic.AddUint64(&metrics.Failures, 1)
+			} else {
+				atomic.AddUint64(&metrics.Successes, 1)
+			}
+
+			return output, err
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the number of requests using a token bucket approach.
+func RateLimiterMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int
+		lastRefill time.Time
+	)
+	tokens = capacity
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			refillTokens := int(elapsed / refillRate)
+
+			if refillTokens > 0 {
+				tokens += refillTokens
+				if tokens > capacity {
+					tokens = capacity
+				}
+				lastRefill = now
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
 
 // LoggingMiddleware logs the payload size and processing time.
 func LoggingMiddleware(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
