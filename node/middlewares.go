@@ -2,7 +2,6 @@ package node
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"log"
 	"sync"
@@ -69,15 +68,15 @@ func CacheMiddleware(ttl time.Duration) Middleware {
 	}
 
 	var (
-		mu    sync.RWMutex
-		cache = make(map[string]cacheEntry)
+		mu sync.RWMutex
+		// Using [32]byte as key prevents heap allocations associated with string hex encoding
+		cache = make(map[[32]byte]cacheEntry)
 	)
 
 	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
 		return func(input []byte) ([]byte, error) {
-			hasher := sha256.New()
-			hasher.Write(input)
-			key := hex.EncodeToString(hasher.Sum(nil))
+			// sha256.Sum256 operates on the stack, preventing heap allocations
+			key := sha256.Sum256(input)
 
 			mu.RLock()
 			entry, exists := cache[key]
