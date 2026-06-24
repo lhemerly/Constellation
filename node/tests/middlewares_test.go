@@ -2,9 +2,10 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestMiddlewares_Logging(t *testing.T) {
@@ -312,5 +313,85 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limiter-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Rate of 10 tokens per second (1 token per 100ms), burst of 2
+	n.Use(node.RateLimiterMiddleware(10, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two requests should pass due to burst capacity
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected first request to succeed, got %v", err)
+	}
+
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected second request to succeed, got %v", err)
+	}
+
+	// Third request immediately should fail
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time for 1 token to regenerate (> 100ms)
+	time.Sleep(150 * time.Millisecond)
+
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected fourth request to succeed after waiting, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	tracker := &node.MetricsTracker{}
+	n.Use(node.MetricsMiddleware(tracker))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond)
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// Process one successful request
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Process one failing request
+	fail = true
+	_, err = n.Process([]byte("input2"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if tracker.Invocations != 2 {
+		t.Errorf("expected 2 invocations, got %d", tracker.Invocations)
+	}
+	if tracker.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", tracker.Successes)
+	}
+	if tracker.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", tracker.Failures)
+	}
+	if tracker.TotalTimeNanos <= 0 {
+		t.Errorf("expected TotalTimeNanos > 0, got %d", tracker.TotalTimeNanos)
 	}
 }
