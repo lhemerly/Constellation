@@ -17,3 +17,6 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+## 2024-05-19 - Optimize CacheMiddleware Hash Generation
+**Learning:** Using `sha256.New()` and encoding the hash to a string (`hex.EncodeToString`) as a map key in the hot path of `CacheMiddleware` caused significant overhead due to interface allocation and string conversions.
+**Action:** Replace dynamic hash interface usage with `sha256.Sum256(input)` and use the resulting fixed-size array `[32]byte` directly as the map key. This approach avoids heap allocations and dramatically reduces the overhead per operation.
