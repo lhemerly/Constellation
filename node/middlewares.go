@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -57,6 +58,79 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// ErrRateLimitExceeded is returned when the rate limiter blocks a request.
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimiterMiddleware implements a token bucket rate limiter.
+func RateLimiterMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     int       = capacity
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Refill tokens
+			if elapsed >= refillRate {
+				refillTokens := int(elapsed / refillRate)
+				tokens += refillTokens
+				if tokens > capacity {
+					tokens = capacity
+				}
+				lastRefill = now.Add(-elapsed % refillRate)
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// MetricsTracker holds the tracked metrics for the node.
+type MetricsTracker struct {
+	Invocations uint64
+	Successes   uint64
+	Failures    uint64
+	TotalTimeNS uint64 // total time in nanoseconds
+}
+
+// MetricsMiddleware tracks invocation counts, success/failure rates, and processing times.
+// It accepts a pointer to a MetricsTracker so the caller can inspect the metrics.
+func MetricsMiddleware(tracker *MetricsTracker) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&tracker.Invocations, 1)
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start)
+
+			atomic.AddUint64(&tracker.TotalTimeNS, uint64(duration.Nanoseconds()))
+
+			if err != nil {
+				atomic.AddUint64(&tracker.Failures, 1)
+			} else {
+				atomic.AddUint64(&tracker.Successes, 1)
+			}
+
+			return output, err
 		}
 	}
 }

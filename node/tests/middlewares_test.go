@@ -97,6 +97,80 @@ func TestMiddlewares_Recovery(t *testing.T) {
 	}
 }
 
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimiterMiddleware(2, 50*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("ok"), nil
+	})
+
+	// First two should succeed
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	_, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+
+	// Third should fail due to rate limit
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait for refill
+	time.Sleep(60 * time.Millisecond)
+
+	// Fourth should succeed again
+	_, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected success after refill, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	tracker := &node.MetricsTracker{}
+	n.Use(node.MetricsMiddleware(tracker))
+
+	failMode := false
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond)
+		if failMode {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("ok"), nil
+	})
+
+	// Success
+	n.Process([]byte("input1"))
+
+	// Failure
+	failMode = true
+	n.Process([]byte("input2"))
+
+	if tracker.Invocations != 2 {
+		t.Errorf("expected 2 invocations, got %d", tracker.Invocations)
+	}
+	if tracker.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", tracker.Successes)
+	}
+	if tracker.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", tracker.Failures)
+	}
+	if tracker.TotalTimeNS < uint64(20*time.Millisecond) {
+		t.Errorf("expected total time to be >= 20ms, got %d ns", tracker.TotalTimeNS)
+	}
+}
+
 func TestMiddlewares_CircuitBreaker(t *testing.T) {
 	n := node.NewBaseNode("cb-node")
 	defer cleanupNodes(t, []node.Node{n})
