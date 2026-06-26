@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,70 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the number of requests per second using a token bucket algorithm.
+func RateLimiterMiddleware(rate float64, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burst)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+			tokens += elapsed * rate
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastRefill = now
+
+			if tokens >= 1 {
+				tokens--
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// Metrics captures telemetry data for node processing.
+type Metrics struct {
+	ActiveRequests uint64
+	TotalSuccess   uint64
+	TotalFailures  uint64
+	TotalDuration  int64 // in nanoseconds
+}
+
+// MetricsMiddleware tracks metrics such as active requests, successes, failures, and total processing duration.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.ActiveRequests, 1)
+			defer atomic.AddUint64(&metrics.ActiveRequests, ^uint64(0)) // decrement
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start).Nanoseconds()
+
+			atomic.AddInt64(&metrics.TotalDuration, duration)
+
+			if err != nil {
+				atomic.AddUint64(&metrics.TotalFailures, 1)
+			} else {
+				atomic.AddUint64(&metrics.TotalSuccess, 1)
+			}
+
+			return output, err
 		}
 	}
 }

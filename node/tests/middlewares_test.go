@@ -314,3 +314,69 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 1 request per second, with a burst of 2
+	n.Use(node.RateLimiterMiddleware(1, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return input, nil
+	})
+
+	// Should pass (consumes 1 token, 1 remaining)
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected no error for req1, got %v", err)
+	}
+
+	// Should pass (consumes 1 token, 0 remaining)
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected no error for req2, got %v", err)
+	}
+
+	// Should fail (no tokens)
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded for req3, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	failProcess := false
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if failProcess {
+			return nil, errors.New("simulated error")
+		}
+		return input, nil
+	})
+
+	// 1 success
+	_, _ = n.Process([]byte("success"))
+
+	// 1 failure
+	failProcess = true
+	_, _ = n.Process([]byte("failure"))
+
+	if metrics.TotalSuccess != 1 {
+		t.Errorf("expected 1 success, got %d", metrics.TotalSuccess)
+	}
+	if metrics.TotalFailures != 1 {
+		t.Errorf("expected 1 failure, got %d", metrics.TotalFailures)
+	}
+	if metrics.ActiveRequests != 0 {
+		t.Errorf("expected 0 active requests, got %d", metrics.ActiveRequests)
+	}
+	if metrics.TotalDuration <= 0 {
+		t.Errorf("expected TotalDuration > 0, got %d", metrics.TotalDuration)
+	}
+}
