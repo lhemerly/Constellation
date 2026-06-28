@@ -2,9 +2,10 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestMiddlewares_Logging(t *testing.T) {
@@ -312,5 +313,63 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestRateLimiterMiddleware(t *testing.T) {
+	// Rate: 10 per second, burst: 1
+	n := node.NewBaseNode("test")
+	n.Use(node.RateLimiterMiddleware(10, 1))
+
+	// First request should succeed
+	_, err := n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+
+	// Immediate second request should fail due to rate limit
+	_, err = n.Process([]byte("input"))
+	if err == nil || err.Error() != "rate limit exceeded" {
+		t.Fatalf("Expected rate limit exceeded error, got %v", err)
+	}
+
+	// Wait enough time to replenish token
+	time.Sleep(150 * time.Millisecond)
+
+	// Third request should succeed
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("Expected no error after wait, got %v", err)
+	}
+}
+
+func TestMetricsMiddleware(t *testing.T) {
+	n := node.NewBaseNode("test")
+	tracker := &node.MetricsTracker{}
+	n.Use(node.MetricsMiddleware(tracker))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("failed")
+		}
+		time.Sleep(10 * time.Millisecond)
+		return input, nil
+	})
+
+	n.Process([]byte("success"))
+	n.Process([]byte("fail"))
+	n.Process([]byte("success"))
+
+	if tracker.TotalRequests != 3 {
+		t.Errorf("Expected 3 total requests, got %d", tracker.TotalRequests)
+	}
+	if tracker.SuccessfulRequests != 2 {
+		t.Errorf("Expected 2 successful requests, got %d", tracker.SuccessfulRequests)
+	}
+	if tracker.FailedRequests != 1 {
+		t.Errorf("Expected 1 failed request, got %d", tracker.FailedRequests)
+	}
+	if tracker.TotalDurationNs == 0 {
+		t.Errorf("Expected total duration > 0")
 	}
 }
