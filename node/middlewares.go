@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -207,6 +209,75 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			} else {
 				failures = 0
 				state = 0 // Closed
+			}
+
+			return output, err
+		}
+	}
+}
+
+// RateLimitMiddleware limits the rate of processes using a token bucket algorithm.
+func RateLimitMiddleware(rate time.Duration, burst int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64
+		lastRefill time.Time
+	)
+
+	tokens = float64(burst)
+	lastRefill = time.Now()
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := float64(elapsed) / float64(rate)
+
+			tokens += tokensToAdd
+			if tokens > float64(burst) {
+				tokens = float64(burst)
+			}
+			lastRefill = now
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// Metrics holds performance and execution metrics for a node process.
+type Metrics struct {
+	TotalInvocations      int64
+	SuccessfulInvocations int64
+	FailedInvocations     int64
+	TotalProcessingTime   int64 // Stored in nanoseconds
+}
+
+// MetricsMiddleware tracks invocations, successes, failures, and execution times.
+// Note: It's recommended to pass a pointer to a struct that caller maintains
+func MetricsMiddleware(m *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddInt64(&m.TotalInvocations, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start).Nanoseconds()
+			atomic.AddInt64(&m.TotalProcessingTime, duration)
+
+			if err != nil {
+				atomic.AddInt64(&m.FailedInvocations, 1)
+			} else {
+				atomic.AddInt64(&m.SuccessfulInvocations, 1)
 			}
 
 			return output, err
