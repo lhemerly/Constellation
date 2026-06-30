@@ -2,9 +2,10 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestMiddlewares_Logging(t *testing.T) {
@@ -312,5 +313,94 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	n.Use(node.RateLimitMiddleware(50*time.Millisecond, 2)) // 2 tokens max, refill 1 every 50ms
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Should succeed twice (using initial burst)
+	res1, err1 := n.Process([]byte("input1"))
+	if err1 != nil {
+		t.Fatalf("expected success, got %v", err1)
+	}
+	if string(res1) != "success" {
+		t.Errorf("expected success, got %s", string(res1))
+	}
+
+	res2, err2 := n.Process([]byte("input2"))
+	if err2 != nil {
+		t.Fatalf("expected success, got %v", err2)
+	}
+	if string(res2) != "success" {
+		t.Errorf("expected success, got %s", string(res2))
+	}
+
+	// 2. Should fail immediately since tokens are exhausted
+	_, err3 := n.Process([]byte("input3"))
+	if !errors.Is(err3, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err3)
+	}
+
+	// 3. Wait for refill and try again
+	time.Sleep(60 * time.Millisecond) // Wait for 1 token to refill
+
+	res4, err4 := n.Process([]byte("input4"))
+	if err4 != nil {
+		t.Fatalf("expected success after refill, got %v", err4)
+	}
+	if string(res4) != "success" {
+		t.Errorf("expected success, got %s", string(res4))
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	failProcess := false
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond) // Simulate work
+		if failProcess {
+			return nil, errors.New("simulated failure")
+		}
+		return []byte("success"), nil
+	})
+
+	// Process successfully
+	_, err := n.Process([]byte("success"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Process with failure
+	failProcess = true
+	_, err = n.Process([]byte("fail"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// Verify metrics
+	if metrics.TotalInvocations != 2 {
+		t.Errorf("expected 2 TotalInvocations, got %d", metrics.TotalInvocations)
+	}
+	if metrics.SuccessfulInvocations != 1 {
+		t.Errorf("expected 1 SuccessfulInvocations, got %d", metrics.SuccessfulInvocations)
+	}
+	if metrics.FailedInvocations != 1 {
+		t.Errorf("expected 1 FailedInvocations, got %d", metrics.FailedInvocations)
+	}
+	if metrics.TotalProcessingTime < 20*time.Millisecond.Nanoseconds() { // Total time > 20ms
+		t.Errorf("expected TotalProcessingTime to be > 20ms, got %d ns", metrics.TotalProcessingTime)
 	}
 }
