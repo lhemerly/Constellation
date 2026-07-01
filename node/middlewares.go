@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -207,6 +208,113 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			} else {
 				failures = 0
 				state = 0 // Closed
+			}
+
+			return output, err
+		}
+	}
+}
+
+// ErrRateLimitExceeded is returned when the rate limit is exceeded.
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimitMiddleware restricts how many requests a node can process over a time window.
+// It uses a simple token bucket algorithm without background goroutines to prevent resource leaks.
+func RateLimitMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = capacity
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			// Calculate how many tokens to add based on elapsed time
+			if elapsed >= refillRate {
+				tokensToAdd := int(elapsed / refillRate)
+				tokens += tokensToAdd
+				if tokens > capacity {
+					tokens = capacity
+				}
+				lastRefill = now.Add(-time.Duration(elapsed.Nanoseconds() % refillRate.Nanoseconds()))
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// ErrConcurrencyLimitExceeded is returned when the concurrency limit is reached.
+var ErrConcurrencyLimitExceeded = errors.New("concurrency limit exceeded")
+
+// ConcurrencyLimitMiddleware limits the maximum number of concurrent requests a node can handle.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case sem <- struct{}{}:
+				// Acquired semaphore
+				defer func() { <-sem }()
+				return next(input)
+			default:
+				// Semaphore full
+				return nil, ErrConcurrencyLimitExceeded
+			}
+		}
+	}
+}
+
+// FallbackMiddleware intercepts errors and calls a user-provided fallback function.
+func FallbackMiddleware(fallback func([]byte, error) ([]byte, error)) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			output, err := next(input)
+			if err != nil {
+				return fallback(input, err)
+			}
+			return output, nil
+		}
+	}
+}
+
+// Metrics tracks the performance and usage statistics of a node.
+type Metrics struct {
+	TotalRequests       uint64
+	SuccessfulRequests  uint64
+	FailedRequests      uint64
+	TotalProcessingTime int64 // stored in nanoseconds
+}
+
+// MetricsMiddleware tracks total requests, successes, failures, and total processing time.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.TotalRequests, 1)
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start).Nanoseconds()
+
+			atomic.AddInt64(&metrics.TotalProcessingTime, duration)
+
+			if err != nil {
+				atomic.AddUint64(&metrics.FailedRequests, 1)
+			} else {
+				atomic.AddUint64(&metrics.SuccessfulRequests, 1)
 			}
 
 			return output, err
