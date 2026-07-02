@@ -6,12 +6,14 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 var (
 	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
 	ErrProcessTimeout     = errors.New("process timed out")
+	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
 )
 
 // LoggingMiddleware logs the payload size and processing time.
@@ -57,6 +59,69 @@ func RetryMiddleware(retries int, delay time.Duration) Middleware {
 			}
 
 			return nil, errors.Join(errors.New("operation failed after retries"), err)
+		}
+	}
+}
+
+// RateLimitMiddleware limits the number of requests that can be processed per second using a token bucket algorithm.
+func RateLimitMiddleware(requestsPerSecond float64, burstSize int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(burstSize)
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+
+			tokens += elapsed * requestsPerSecond
+			if tokens > float64(burstSize) {
+				tokens = float64(burstSize)
+			}
+			lastUpdate = now
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// NodeMetrics holds statistics about the processed requests.
+type NodeMetrics struct {
+	TotalRequests      uint64
+	SuccessfulRequests uint64
+	FailedRequests     uint64
+	TotalDurationNs    uint64 // Total duration in nanoseconds
+}
+
+// MetricsMiddleware tracks total requests, successes, failures, and processing durations.
+func MetricsMiddleware(metrics *NodeMetrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.TotalRequests, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start).Nanoseconds()
+			atomic.AddUint64(&metrics.TotalDurationNs, uint64(duration))
+
+			if err != nil {
+				atomic.AddUint64(&metrics.FailedRequests, 1)
+			} else {
+				atomic.AddUint64(&metrics.SuccessfulRequests, 1)
+			}
+
+			return output, err
 		}
 	}
 }
