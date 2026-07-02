@@ -314,3 +314,81 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("rate-limit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 10 requests per second, burst of 2
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two requests should succeed (burst)
+	for i := 0; i < 2; i++ {
+		_, err := n.Process([]byte("input"))
+		if err != nil {
+			t.Fatalf("expected nil error on request %d, got %v", i+1, err)
+		}
+	}
+
+	// Third request should fail immediately
+	_, err := n.Process([]byte("input"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time to accumulate 1 token (10 requests/sec = 100ms per token)
+	time.Sleep(110 * time.Millisecond)
+
+	// Next request should succeed
+	_, err = n.Process([]byte("input"))
+	if err != nil {
+		t.Fatalf("expected nil error after waiting, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.NodeMetrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond) // Simulate some work
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// Successful request
+	_, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Failed request
+	fail = true
+	_, err = n.Process([]byte("input2"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if metrics.TotalRequests != 2 {
+		t.Errorf("expected 2 total requests, got %d", metrics.TotalRequests)
+	}
+	if metrics.SuccessfulRequests != 1 {
+		t.Errorf("expected 1 successful request, got %d", metrics.SuccessfulRequests)
+	}
+	if metrics.FailedRequests != 1 {
+		t.Errorf("expected 1 failed request, got %d", metrics.FailedRequests)
+	}
+	if metrics.TotalDurationNs == 0 {
+		t.Errorf("expected non-zero total duration")
+	}
+}
