@@ -147,6 +147,8 @@ import (
     "context"
     "fmt"
     "log"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
     "github.com/lhemerly/Constellation/connection"
 )
 
@@ -155,7 +157,7 @@ func main() {
     ctx := context.Background()
 
     // Create a new gRPC connection
-    conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051")
+    conn, err := factory.NewConnection(ctx, "grpc", "localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
     if err != nil {
         log.Fatalf("Failed to create connection: %v", err)
     }
