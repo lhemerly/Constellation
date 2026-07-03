@@ -314,3 +314,86 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// 2 tokens max, 10 tokens refilled per second
+	n.Use(node.RateLimiterMiddleware(2, 10))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("ok"), nil
+	})
+
+	// 1st request should pass
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 2nd request should pass
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+
+	// 3rd request should fail immediately since tokens are depleted and not enough time elapsed
+	_, err = n.Process([]byte("req3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// Wait enough time to get 1 token back (10 tokens/sec = 1 token/100ms)
+	time.Sleep(150 * time.Millisecond)
+
+	// Should pass again
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("expected nil error after waiting, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metricsMiddleware, metrics := node.NewMetricsMiddleware()
+	n.Use(metricsMiddleware)
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		time.Sleep(10 * time.Millisecond)
+		return []byte("ok"), nil
+	})
+
+	// Successful request
+	_, _ = n.Process([]byte("req1"))
+
+	// Failed request
+	fail = true
+	_, _ = n.Process([]byte("req2"))
+
+	// Another successful request
+	fail = false
+	_, _ = n.Process([]byte("req3"))
+
+	if metrics.Invocations != 3 {
+		t.Errorf("expected 3 invocations, got %d", metrics.Invocations)
+	}
+	if metrics.Successes != 2 {
+		t.Errorf("expected 2 successes, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", metrics.Failures)
+	}
+
+	totalTimeMs := time.Duration(metrics.TotalTime).Milliseconds()
+	// Total sleep time is around 20ms for the two successful ones, let's just make sure it's > 0
+	if totalTimeMs < 10 {
+		t.Errorf("expected total time to be >= 10ms, got %dms", totalTimeMs)
+	}
+}

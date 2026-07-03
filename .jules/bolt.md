@@ -17,3 +17,11 @@
 ## 2024-05-18 - Optimize Lock Contention in Notify Method
 **Learning:** Holding a read lock (`RLock()`) for the entire duration of iterating over a map and spawning long-running or blocking goroutines (`wg.Wait()`) creates massive lock contention and opens the door for deadlocks. If any of the spawned workers attempt to acquire a write lock (`Lock()`) on the same mutex (e.g., trying to subscribe or unsubscribe), it will deadlock because the read lock is still held by the waiting parent.
 **Action:** Always copy map/slice contents to a local slice under the lock, then immediately release the lock before iterating and processing the items concurrently. Apply this specifically when dealing with publisher/subscriber patterns in the codebase to keep the hot path lock-free.
+
+## 2024-06-25 - Atomic Operations for Metrics Tracking
+**Learning:** When building node middleware to track invocation metrics in a highly concurrent framework like Constellation, using standard `uint64` counters will result in data races.
+**Action:** Use `sync/atomic` methods like `atomic.AddUint64` and `atomic.AddInt64` for tracking counters (invocations, successes, failures, total duration) to safely gather stats across concurrent node processing routines.
+
+## 2024-06-25 - Rate Limiting with Mutex and Token Bucket
+**Learning:** For rate limiting middleware, spawning background `time.Ticker` goroutines to refill tokens can leak resources if not cleaned up properly during node teardown.
+**Action:** Calculate the elapsed time explicitly (`time.Now().Sub(lastRefill)`) on each request within a `sync.Mutex` lock to refill tokens dynamically based on the refill rate. This eliminates the need for background goroutines while maintaining accurate rate limiting.
