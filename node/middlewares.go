@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -212,4 +213,76 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			return output, err
 		}
 	}
+}
+
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimiterMiddleware limits the number of operations per time window.
+func RateLimiterMiddleware(maxTokens float64, refillRate float64) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = maxTokens
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+
+			// Refill tokens based on elapsed time
+			tokens += elapsed * refillRate
+			if tokens > maxTokens {
+				tokens = maxTokens
+			}
+			lastRefill = now
+
+			// Check if we have enough tokens to proceed
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+
+			mu.Unlock()
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// Metrics holds performance and processing statistics for a node.
+type Metrics struct {
+	Invocations uint64
+	Successes   uint64
+	Failures    uint64
+	TotalTime   int64 // Stored in nanoseconds
+}
+
+// NewMetricsMiddleware creates a middleware that tracks invocations, successes, failures, and execution time.
+// It returns the middleware function and a pointer to the Metrics struct where stats are stored.
+func NewMetricsMiddleware() (Middleware, *Metrics) {
+	metrics := &Metrics{}
+
+	middleware := func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.Invocations, 1)
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start)
+
+			atomic.AddInt64(&metrics.TotalTime, duration.Nanoseconds())
+
+			if err != nil {
+				atomic.AddUint64(&metrics.Failures, 1)
+			} else {
+				atomic.AddUint64(&metrics.Successes, 1)
+			}
+
+			return output, err
+		}
+	}
+
+	return middleware, metrics
 }
