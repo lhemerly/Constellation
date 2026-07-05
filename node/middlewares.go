@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -210,6 +211,72 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			}
 
 			return output, err
+		}
+	}
+}
+
+// Metrics holds the tracked metrics for the MetricsMiddleware.
+type Metrics struct {
+	TotalRequests   uint64
+	Successes       uint64
+	Failures        uint64
+	TotalDurationNs uint64
+}
+
+// MetricsMiddleware tracks the number of requests, successes, failures, and total processing duration.
+func MetricsMiddleware(m *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&m.TotalRequests, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start).Nanoseconds()
+			atomic.AddUint64(&m.TotalDurationNs, uint64(duration))
+
+			if err != nil {
+				atomic.AddUint64(&m.Failures, 1)
+			} else {
+				atomic.AddUint64(&m.Successes, 1)
+			}
+
+			return output, err
+		}
+	}
+}
+
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimitMiddleware applies a token bucket rate limiting strategy.
+// rate is the number of tokens added per second.
+// capacity is the maximum burst size.
+func RateLimitMiddleware(rate float64, capacity int) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = float64(capacity)
+		lastRefill time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill).Seconds()
+			tokens += elapsed * rate
+			if tokens > float64(capacity) {
+				tokens = float64(capacity)
+			}
+			lastRefill = now
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }

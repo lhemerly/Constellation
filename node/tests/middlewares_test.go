@@ -2,9 +2,10 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestMiddlewares_Logging(t *testing.T) {
@@ -312,5 +313,108 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	var fail bool
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		time.Sleep(10 * time.Millisecond) // simulate work
+		if fail {
+			return nil, errors.New("simulated error")
+		}
+		return []byte("success"), nil
+	})
+
+	// 1. Successful request
+	res, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	if metrics.TotalRequests != 1 {
+		t.Errorf("expected 1 total request, got %d", metrics.TotalRequests)
+	}
+	if metrics.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 0 {
+		t.Errorf("expected 0 failures, got %d", metrics.Failures)
+	}
+	if metrics.TotalDurationNs == 0 {
+		t.Errorf("expected TotalDurationNs > 0")
+	}
+
+	// 2. Failed request
+	fail = true
+	_, err = n.Process([]byte("input2"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if metrics.TotalRequests != 2 {
+		t.Errorf("expected 2 total requests, got %d", metrics.TotalRequests)
+	}
+	if metrics.Successes != 1 {
+		t.Errorf("expected 1 success, got %d", metrics.Successes)
+	}
+	if metrics.Failures != 1 {
+		t.Errorf("expected 1 failure, got %d", metrics.Failures)
+	}
+}
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Add 10 tokens per second, max burst capacity of 2.
+	n.Use(node.RateLimitMiddleware(10.0, 2))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. First two requests should pass immediately (burst capacity)
+	res, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	res, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Third request immediately should fail (rate limit exceeded)
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for 1 token to refill (rate is 10 tokens/sec, so 1 token = 100ms)
+	time.Sleep(110 * time.Millisecond)
+
+	// 4. Fourth request should pass
+	res, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
 	}
 }
