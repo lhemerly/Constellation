@@ -314,3 +314,93 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
 }
+
+func TestMiddlewares_RateLimiter(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	capacity := 2
+	refillRate := 50 * time.Millisecond
+	n.Use(node.RateLimiterMiddleware(capacity, refillRate))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// 1. Initially successful requests up to capacity
+	res, err := n.Process([]byte("input1"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	res, err = n.Process([]byte("input2"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+
+	// 2. Third request should fail due to rate limiting
+	_, err = n.Process([]byte("input3"))
+	if !errors.Is(err, node.ErrRateLimitExceeded) {
+		t.Fatalf("expected ErrRateLimitExceeded, got %v", err)
+	}
+
+	// 3. Wait for token to refill
+	time.Sleep(refillRate + 10*time.Millisecond)
+
+	// 4. Request should now succeed
+	res, err = n.Process([]byte("input4"))
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if string(res) != "success" {
+		t.Errorf("expected success, got %s", string(res))
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("simulated error")
+		}
+		time.Sleep(10 * time.Millisecond)
+		return []byte("success"), nil
+	})
+
+	// 1. Successful request
+	_, err := n.Process([]byte("success"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 2. Failed request
+	_, err = n.Process([]byte("fail"))
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	// 3. Check metrics
+	if metrics.TotalRequests != 2 {
+		t.Errorf("expected 2 TotalRequests, got %d", metrics.TotalRequests)
+	}
+	if metrics.Successful != 1 {
+		t.Errorf("expected 1 Successful, got %d", metrics.Successful)
+	}
+	if metrics.Failed != 1 {
+		t.Errorf("expected 1 Failed, got %d", metrics.Failed)
+	}
+	if metrics.TotalDuration <= 0 {
+		t.Errorf("expected TotalDuration > 0, got %d", metrics.TotalDuration)
+	}
+}
