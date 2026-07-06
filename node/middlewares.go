@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -207,6 +208,76 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			} else {
 				failures = 0
 				state = 0 // Closed
+			}
+
+			return output, err
+		}
+	}
+}
+
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// RateLimiterMiddleware implements a token bucket rate limiter to restrict the frequency of requests.
+// capacity is the maximum burst size, and refillRate is the duration to wait before adding a new token.
+func RateLimiterMiddleware(capacity int, refillRate time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = float64(capacity)
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+			tokensToAdd := float64(elapsed) / float64(refillRate)
+
+			if tokensToAdd > 0 {
+				tokens += tokensToAdd
+				if tokens > float64(capacity) {
+					tokens = float64(capacity)
+				}
+				lastRefill = now
+			}
+
+			if tokens >= 1.0 {
+				tokens -= 1.0
+				mu.Unlock()
+				return next(input)
+			}
+			mu.Unlock()
+
+			return nil, ErrRateLimitExceeded
+		}
+	}
+}
+
+// Metrics represents the collected statistics for a node.
+type Metrics struct {
+	TotalRequests uint64
+	Successful    uint64
+	Failed        uint64
+	TotalDuration int64 // in nanoseconds
+}
+
+// MetricsMiddleware tracks node performance and reliability metrics.
+// It populates the provided Metrics struct using atomic operations.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.TotalRequests, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start).Nanoseconds()
+			atomic.AddInt64(&metrics.TotalDuration, duration)
+
+			if err != nil {
+				atomic.AddUint64(&metrics.Failed, 1)
+			} else {
+				atomic.AddUint64(&metrics.Successful, 1)
 			}
 
 			return output, err
