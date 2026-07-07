@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -210,6 +211,100 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			}
 
 			return output, err
+		}
+	}
+}
+
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+var ErrConcurrencyLimitExceeded = errors.New("concurrency limit exceeded")
+
+// RateLimitMiddleware limits the number of requests that can be processed per given duration.
+// It implements a basic token bucket algorithm without spawning background goroutines.
+func RateLimitMiddleware(requests int, duration time.Duration) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     = requests
+		lastRefill = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			// Calculate elapsed time and replenish tokens if duration has passed
+			now := time.Now()
+			elapsed := now.Sub(lastRefill)
+
+			if elapsed >= duration {
+				// Refill based on how many full intervals have passed
+				refillCount := int(elapsed/duration) * requests
+				tokens += refillCount
+				if tokens > requests {
+					tokens = requests
+				}
+				// Advance lastRefill by the exact number of durations that passed
+				lastRefill = lastRefill.Add(time.Duration(int(elapsed/duration)) * duration)
+			}
+
+			if tokens <= 0 {
+				mu.Unlock()
+				return nil, ErrRateLimitExceeded
+			}
+
+			tokens--
+			mu.Unlock()
+
+			return next(input)
+		}
+	}
+}
+
+// Metrics tracks the performance and usage of a node.
+type Metrics struct {
+	TotalRequests      uint64
+	SuccessfulRequests uint64
+	FailedRequests     uint64
+	TotalDuration      int64 // in nanoseconds
+}
+
+// MetricsMiddleware records usage and performance metrics atomically.
+func MetricsMiddleware(metrics *Metrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.TotalRequests, 1)
+
+			start := time.Now()
+			output, err := next(input)
+			duration := time.Since(start).Nanoseconds()
+
+			atomic.AddInt64(&metrics.TotalDuration, duration)
+
+			if err != nil {
+				atomic.AddUint64(&metrics.FailedRequests, 1)
+			} else {
+				atomic.AddUint64(&metrics.SuccessfulRequests, 1)
+			}
+
+			return output, err
+		}
+	}
+}
+
+// ConcurrencyLimitMiddleware limits the number of concurrent executions allowed within the node.
+func ConcurrencyLimitMiddleware(maxConcurrent int) Middleware {
+	sem := make(chan struct{}, maxConcurrent)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			select {
+			case sem <- struct{}{}: // Acquire token
+				defer func() { <-sem }() // Release token when done
+			default:
+				// Fast fail if limit is reached
+				return nil, ErrConcurrencyLimitExceeded
+			}
+
+			return next(input)
 		}
 	}
 }
