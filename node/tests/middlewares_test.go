@@ -3,6 +3,8 @@ package node_test
 import (
 	"errors"
 	"github.com/lhemerly/Constellation/node"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -313,4 +315,143 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
 	}
+}
+
+func TestMiddlewares_RateLimit(t *testing.T) {
+	n := node.NewBaseNode("ratelimit-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Allow 2 requests per 100ms
+	n.Use(node.RateLimitMiddleware(2, 100*time.Millisecond))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		return []byte("success"), nil
+	})
+
+	// First two requests should succeed
+	res, err := n.Process([]byte("input1"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success on first request, got err: %v, res: %s", err, string(res))
+	}
+
+	res, err = n.Process([]byte("input2"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success on second request, got err: %v, res: %s", err, string(res))
+	}
+
+	// Third request should fail immediately
+	res, err = n.Process([]byte("input3"))
+	if err != node.ErrRateLimitExceeded {
+		t.Fatalf("expected ErrRateLimitExceeded, got err: %v, res: %s", err, string(res))
+	}
+
+	// Wait for tokens to replenish
+	time.Sleep(110 * time.Millisecond)
+
+	// Should succeed again
+	res, err = n.Process([]byte("input4"))
+	if err != nil || string(res) != "success" {
+		t.Fatalf("expected success after replenishment, got err: %v, res: %s", err, string(res))
+	}
+}
+
+func TestMiddlewares_Metrics(t *testing.T) {
+	n := node.NewBaseNode("metrics-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	metrics := &node.Metrics{}
+	n.Use(node.MetricsMiddleware(metrics))
+
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if string(input) == "fail" {
+			return nil, errors.New("simulated error")
+		}
+		// Simulate some minimal work
+		time.Sleep(10 * time.Millisecond)
+		return []byte("success"), nil
+	})
+
+	// Process some successful requests
+	n.Process([]byte("success1"))
+	n.Process([]byte("success2"))
+
+	// Process a failing request
+	n.Process([]byte("fail"))
+
+	total := atomic.LoadUint64(&metrics.TotalRequests)
+	successes := atomic.LoadUint64(&metrics.SuccessfulRequests)
+	failures := atomic.LoadUint64(&metrics.FailedRequests)
+	duration := atomic.LoadInt64(&metrics.TotalDuration)
+
+	if total != 3 {
+		t.Errorf("expected 3 total requests, got %d", total)
+	}
+	if successes != 2 {
+		t.Errorf("expected 2 successful requests, got %d", successes)
+	}
+	if failures != 1 {
+		t.Errorf("expected 1 failed request, got %d", failures)
+	}
+	if duration <= 0 {
+		t.Errorf("expected duration to be > 0, got %d", duration)
+	}
+}
+
+func TestMiddlewares_ConcurrencyLimit(t *testing.T) {
+	n := node.NewBaseNode("concurrency-node")
+	defer cleanupNodes(t, []node.Node{n})
+
+	// Limit to 2 concurrent executions
+	n.Use(node.ConcurrencyLimitMiddleware(2))
+
+	blockCh := make(chan struct{})
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		<-blockCh // block until released
+		return []byte("success"), nil
+	})
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 3)
+
+	// Launch 3 requests concurrently
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := n.Process([]byte("input"))
+			errCh <- err
+		}()
+	}
+
+	// Wait a bit to ensure all goroutines hit the middleware
+	time.Sleep(50 * time.Millisecond)
+
+	// Unblock 2 processes
+	blockCh <- struct{}{}
+	blockCh <- struct{}{}
+
+	// Check results
+	wg.Wait()
+	close(errCh)
+
+	var successCount, limitedCount int
+	for err := range errCh {
+		if err == nil {
+			successCount++
+		} else if err == node.ErrConcurrencyLimitExceeded {
+			limitedCount++
+		} else {
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+
+	if successCount != 2 {
+		t.Errorf("expected 2 successful requests, got %d", successCount)
+	}
+	if limitedCount != 1 {
+		t.Errorf("expected 1 concurrency limited request, got %d", limitedCount)
+	}
+
+	// Close blockCh to clean up any leaked goroutines cleanly
+	close(blockCh)
 }
