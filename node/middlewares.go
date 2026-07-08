@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -210,6 +211,73 @@ func CircuitBreakerMiddleware(maxFailures int, cooldown time.Duration) Middlewar
 			}
 
 			return output, err
+		}
+	}
+}
+
+// NodeMetrics holds atomic counters for tracking node execution.
+type NodeMetrics struct {
+	TotalRequests         uint64
+	SuccessfulRequests    uint64
+	FailedRequests        uint64
+	TotalProcessingTimeNs uint64
+}
+
+// MetricsMiddleware tracks total requests, successful requests, failed requests, and total processing duration.
+func MetricsMiddleware(metrics *NodeMetrics) Middleware {
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			atomic.AddUint64(&metrics.TotalRequests, 1)
+			start := time.Now()
+
+			output, err := next(input)
+
+			duration := time.Since(start)
+			atomic.AddUint64(&metrics.TotalProcessingTimeNs, uint64(duration.Nanoseconds()))
+
+			if err != nil {
+				atomic.AddUint64(&metrics.FailedRequests, 1)
+			} else {
+				atomic.AddUint64(&metrics.SuccessfulRequests, 1)
+			}
+
+			return output, err
+		}
+	}
+}
+
+// RateLimiterMiddleware limits the rate of processing using a token bucket algorithm.
+// It avoids background goroutines by calculating elapsed time on each request.
+func RateLimiterMiddleware(rate float64, capacity float64) Middleware {
+	var (
+		mu         sync.Mutex
+		tokens     float64   = capacity
+		lastUpdate time.Time = time.Now()
+	)
+
+	return func(next func([]byte) ([]byte, error)) func([]byte) ([]byte, error) {
+		return func(input []byte) ([]byte, error) {
+			mu.Lock()
+
+			now := time.Now()
+			elapsed := now.Sub(lastUpdate).Seconds()
+
+			// Add tokens based on elapsed time and rate
+			tokens += elapsed * rate
+			if tokens > capacity {
+				tokens = capacity
+			}
+			lastUpdate = now
+
+			if tokens < 1.0 {
+				mu.Unlock()
+				return nil, errors.New("rate limit exceeded")
+			}
+
+			tokens -= 1.0
+			mu.Unlock()
+
+			return next(input)
 		}
 	}
 }
