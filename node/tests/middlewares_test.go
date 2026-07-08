@@ -2,9 +2,11 @@ package node_test
 
 import (
 	"errors"
-	"github.com/lhemerly/Constellation/node"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lhemerly/Constellation/node"
 )
 
 func TestMiddlewares_Logging(t *testing.T) {
@@ -312,5 +314,82 @@ func TestMiddlewares_CircuitBreaker_EmptyInput(t *testing.T) {
 	_, err = n.Process([]byte{})
 	if !errors.Is(err, node.ErrCircuitBreakerOpen) {
 		t.Fatalf("expected ErrCircuitBreakerOpen, got %v", err)
+	}
+}
+
+func TestMetricsMiddleware(t *testing.T) {
+	metrics := &node.NodeMetrics{}
+	mw := node.MetricsMiddleware(metrics)
+
+	n := node.NewBaseNode("metrics-node")
+	n.SetProcessFunc(func(input []byte) ([]byte, error) {
+		if len(input) == 0 {
+			return nil, errors.New("empty input")
+		}
+		time.Sleep(10 * time.Millisecond) // Simulate work
+		return input, nil
+	})
+	n.Use(mw)
+
+	// Success case
+	_, err := n.Process([]byte("test"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Failure case
+	_, err = n.Process([]byte{})
+	if err == nil {
+		t.Fatalf("expected error, got nil")
+	}
+
+	if atomic.LoadUint64(&metrics.TotalRequests) != 2 {
+		t.Errorf("expected 2 total requests, got %d", metrics.TotalRequests)
+	}
+	if atomic.LoadUint64(&metrics.SuccessfulRequests) != 1 {
+		t.Errorf("expected 1 successful request, got %d", metrics.SuccessfulRequests)
+	}
+	if atomic.LoadUint64(&metrics.FailedRequests) != 1 {
+		t.Errorf("expected 1 failed request, got %d", metrics.FailedRequests)
+	}
+	if atomic.LoadUint64(&metrics.TotalProcessingTimeNs) == 0 {
+		t.Errorf("expected TotalProcessingTimeNs to be > 0")
+	}
+}
+
+func TestRateLimiterMiddleware(t *testing.T) {
+	// Rate: 10 tokens/sec, Capacity: 2 tokens
+	mw := node.RateLimiterMiddleware(10.0, 2.0)
+
+	n := node.NewBaseNode("rate-limit-node")
+	n.Use(mw)
+
+	// Should succeed for the first 2 requests (capacity = 2)
+	_, err := n.Process([]byte("req1"))
+	if err != nil {
+		t.Fatalf("unexpected error on req1: %v", err)
+	}
+
+	_, err = n.Process([]byte("req2"))
+	if err != nil {
+		t.Fatalf("unexpected error on req2: %v", err)
+	}
+
+	// Should fail immediately for the 3rd request since bucket is empty
+	_, err = n.Process([]byte("req3"))
+	if err == nil {
+		t.Fatalf("expected rate limit error on req3, got nil")
+	}
+	if err.Error() != "rate limit exceeded" {
+		t.Fatalf("expected rate limit exceeded error, got: %v", err)
+	}
+
+	// Wait enough time to replenish at least 1 token (rate = 10/sec, so 1 token = 100ms)
+	time.Sleep(110 * time.Millisecond)
+
+	// Should succeed now
+	_, err = n.Process([]byte("req4"))
+	if err != nil {
+		t.Fatalf("unexpected error on req4 after waiting: %v", err)
 	}
 }
